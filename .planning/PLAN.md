@@ -1,19 +1,10 @@
-## SESSION 0 [uncompleted]
-### Prep — Reference materials
-- [ ] Create .planning/referenced_resources/iOS_app/
-- [ ] Copy setup.sh into it
-- [ ] Copy mazer.h into it
-- [ ] Copy ffi.rs into it
-- [ ] Copy ContentView.swift (and any other UI-relevant Swift files) into it
-- [ ] Verify all paths referenced in Sessions 2 and 5 actually exist
-- [ ] Add PLAN.md (this file) to the repo root
 
-## SESSION 1 [uncompleted]
+## SESSION 1 [completed 2026-04-25]
 ### Stage 0 — Repo scaffolding
 Create a Python project for a maze game that wraps the existing Rust mazer library via cffi and renders with Pygame. Project layout:
 
-mazer-py/
-  pyproject.toml         # uses hatchling or setuptools, declares cffi + pygame
+mazer-python/
+  pyproject.toml         # uses hatchling, declares cffi + pygame
   build.sh               # fetches & builds the Rust lib (next stage)
   native/                # build output: libmazer.{so,dylib} + mazer.h
   src/mazer/
@@ -32,7 +23,21 @@ mazer-py/
   .gitignore             # ignores native/, mazer/, __pycache__, .venv, etc.
   README.md
 
-Set up `pyproject.toml` with Python 3.11+, cffi >= 1.16, pygame-ce >= 2.5, pytest >= 8 as dev dep. Add a `python -m mazer` entry point that launches the UI. Don't implement the modules yet — just create the skeleton with `pass` or `NotImplementedError`, plus a working pytest collection that finds the empty test files.
+Set up `pyproject.toml` using **hatchling** as the build backend, with Python 3.11+, cffi >= 1.16, pygame-ce >= 2.5, pytest >= 8 as dev dep. Add a `python -m mazer` entry point that launches the UI. Don't implement the modules yet — just create the skeleton with `pass` or `NotImplementedError`, plus a working pytest collection that finds the empty test files.
+
+#### Session 1 notes
+- Build backend: **hatchling** (modern PyPA-recommended choice in 2026; lighter than setuptools, no `setup.py`).
+- Project root is the existing `mazer-python/` directory — no extra `mazer-py/` nesting; `pyproject.toml`, `src/`, `tests/` live at the repo root.
+- `pyproject.toml` declares `requires-python = ">=3.11"`, runtime deps `cffi>=1.16` + `pygame-ce>=2.5`, dev extra `pytest>=8`. Includes `[tool.hatch.build.targets.wheel] packages = ["src/mazer"]` and `[tool.pytest.ini_options]` with `testpaths = ["tests"]` and `pythonpath = ["src"]` so tests find the package without an editable install.
+- Entry point is `src/mazer/__main__.py` → `mazer.ui.app.main()`. Stubbed `main()` raises `NotImplementedError("Stage 4: ...")`.
+- Stub modules (`_ffi.py`, `types.py`, `maze.py`, `ui/app.py`, `ui/renderer.py`) are docstring-only (or raise `NotImplementedError` where execution is meaningful, per the plan).
+- Test stubs (`test_ffi.py`, `test_maze.py`, `test_integration.py`) each contain one `@pytest.mark.skip`'d placeholder so pytest collection finds them but nothing fails.
+- `.gitignore` fix: the pre-existing `mazer/*` pattern was non-anchored and would have silently ignored `src/mazer/*` — re-anchored to `/mazer/` (Rust source clone target) and added `/native/` (build output).
+- `build.sh` is a chmod +x placeholder that exits 1 with a Stage 1 message.
+- `native/` directory created (empty; gitignored).
+- `README.md` replaced with project description, setup/run/test commands, and layout diagram.
+- Verified: `python3 -m compileall src tests` passes; `pytest --collect-only` (run via a temp pytest install) collects 3 placeholder tests honoring the `pyproject.toml` config; `PYTHONPATH=src python3 -m mazer` correctly routes through `__main__` to `ui.app.main()` and raises the expected `NotImplementedError`.
+- Caveat: only system Python 3.9 is installed on this machine. To actually `pip install -e '.[dev]'` and run the project, the user will need Python 3.11+ (e.g. via Homebrew, pyenv, or uv) before Stage 1.
 
 ## SESSION 2 [uncompleted]
 ### Stage 1 — Build script

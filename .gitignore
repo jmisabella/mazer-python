@@ -1,6 +1,12 @@
 .planning/referenced_resources/*
 
-mazer/*
+.claude/*
+
+# Rust source clone target (build.sh) — anchored so it does not match src/mazer/
+/mazer/
+
+# Native build output (libmazer.{dylib,so}, mazer.h) — populated by build.sh
+/native/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

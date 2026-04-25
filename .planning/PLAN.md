@@ -39,7 +39,7 @@ Set up `pyproject.toml` using **hatchling** as the build backend, with Python 3.
 - Verified: `python3 -m compileall src tests` passes; `pytest --collect-only` (run via a temp pytest install) collects 3 placeholder tests honoring the `pyproject.toml` config; `PYTHONPATH=src python3 -m mazer` correctly routes through `__main__` to `ui.app.main()` and raises the expected `NotImplementedError`.
 - Caveat: only system Python 3.9 is installed on this machine. To actually `pip install -e '.[dev]'` and run the project, the user will need Python 3.11+ (e.g. via Homebrew, pyenv, or uv) before Stage 1.
 
-## SESSION 2 [uncompleted]
+## SESSION 2 [completed 2026-04-25]
 ### Stage 1 — Build script
 Write `build.sh` modeled on the referenced iOS `.planning/referenced_resources/iOS_app/setup.sh`, but targeting the host machine for use with Python (not iOS). Differences from the iOS script:
 
@@ -50,6 +50,21 @@ Write `build.sh` modeled on the referenced iOS `.planning/referenced_resources/i
 5. Same git clone/pull behavior as the iOS script for the `mazer/` subdirectory. Same `Cargo.toml` patching pattern, but ensuring `cdylib` instead of `staticlib`.
 
 The script should be idempotent: running it twice should update the source and rebuild without errors.
+
+#### Session 2 notes
+Decisions that diverged from a literal port of `setup.sh` (rationale documented inline in the script):
+- **No `DEVELOP|RELEASE` positional arg.** That flag exists in the iOS script because simulator and device builds use different Rust targets; the host-Python project has only one target so a mode flag would be noise. Defaults to release; opt into debug with `--debug`.
+- **No `brew update` / `brew install` / `xcode-select --install`.** The iOS script provisions a fresh dev box; ours runs every time someone pulls main. Instead we *check* for `cargo` and a C compiler and bail with an actionable message — provisioning is a one-time user responsibility.
+- **No `rm -rf target/` or `cargo update` by default.** Wiping `target/` defeats Cargo's incremental cache (re-runs went from ~7s to 0.01s with the cache); `cargo update` rewrites `Cargo.lock` with latest semver-compatible deps and creates non-reproducible builds across machines. `Cargo.lock` is the source of truth for "exactly which deps did we build against." Opt into a clean rebuild with `--clean`.
+- **Linux arch: permissive (any).** Plan said "Linux"; we don't whitelist arches because the script is host-only (no cross-compile) and the `.so` filename is identical across Linux archs. Branching is on OS family only — cargo will fail clearly if a host arch isn't supported.
+- **Header destination: kept at `./native/mazer.h`** (original plan). Not `src/mazer/`, because `src/mazer/` is the Python package and anything inside it ships in the wheel. The header is a build-time artifact for cffi only. `native/` is gitignored as the build-output staging dir — clean separation.
+- **Sed → perl.** BSD sed (macOS) and GNU sed (Linux) disagree on in-place edit syntax; perl behaves identically on both.
+
+Bugs found and fixed during implementation (worth noting because they're easy to reintroduce):
+1. **Empty `mazer/` dir from Stage 0 scaffolding.** First run found the empty dir, passed `[ -d mazer ]`, and `git -C mazer pull` walked up the directory tree to the parent repo's `.git`, pulling `mazer-python` instead of `mazer`. Fix: validity check requires `mazer/.git` to exist *and* its origin URL to match `MAZER_REPO_URL`; otherwise we re-clone fresh.
+2. **Perl regex consumed trailing newline.** When inserting `crate-type` under an existing `[lib]` header, the original pattern `s/^(\[lib\])\s*$/$1\ncrate-type = .../` matched `\s*` → the line's `\n`, then replacement only added one newline (between `[lib]` and `crate-type`) rather than two, jamming the next line of Cargo.toml onto the inserted line. Fix: use `[ \t]*` (horizontal whitespace only) so the trailing `\n` stays intact for perl's `-p` mode to print.
+
+Verified end-to-end on macOS arm64: clone → patch → cargo build → stage produced `native/libmazer.dylib` (Mach-O 64-bit arm64, ~708KB) and `native/mazer.h`. Idempotent re-run hits cargo's incremental cache and finishes in <100ms.
 
 ## SESSION 3 [uncompleted]
 ### Stage 2 — cffi binding

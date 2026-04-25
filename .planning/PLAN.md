@@ -1,7 +1,15 @@
+## SESSION 0 [uncompleted]
+### Prep — Reference materials
+- [ ] Create .planning/referenced_resources/iOS_app/
+- [ ] Copy setup.sh into it
+- [ ] Copy mazer.h into it
+- [ ] Copy ffi.rs into it
+- [ ] Copy ContentView.swift (and any other UI-relevant Swift files) into it
+- [ ] Verify all paths referenced in Sessions 2 and 5 actually exist
+- [ ] Add PLAN.md (this file) to the repo root
 
 ## SESSION 1 [uncompleted]
 ### Stage 0 — Repo scaffolding
-
 Create a Python project for a maze game that wraps the existing Rust mazer library via cffi and renders with Pygame. Project layout:
 
 mazer-py/
@@ -28,7 +36,6 @@ Set up `pyproject.toml` with Python 3.11+, cffi >= 1.16, pygame-ce >= 2.5, pytes
 
 ## SESSION 2 [uncompleted]
 ### Stage 1 — Build script
-
 Write `build.sh` modeled on the referenced iOS `.planning/referenced_resources/iOS_app/setup.sh`, but targeting the host machine for use with Python (not iOS). Differences from the iOS script:
 
 1. Crate type must be `cdylib`, not `staticlib` — Python loads dynamic libraries at runtime via cffi.
@@ -41,7 +48,6 @@ The script should be idempotent: running it twice should update the source and r
 
 ## SESSION 3 [uncompleted]
 ### Stage 2 — cffi binding
-
 Implement `src/mazer/_ffi.py` using cffi in API-out-of-line mode. Use a hand-written `cdef` string (do not slurp the header — it has duplicate declarations that will break cffi). The cdef should declare exactly:
 
 - The opaque `Grid` type (as `typedef struct Grid Grid;`).
@@ -61,7 +67,6 @@ These tests should be ugly, low-level, and exhaustive — they're the FFI safety
 
 ## SESSION 4 [uncompleted]
 ### Stage 3 — Pythonic wrapper
-
 Build the high-level API on top of `_ffi.py`. Every test in this stage should read like a usage example — descriptive names, minimal setup, one concept per test. Tests are documentation.
 
 In `types.py`:
@@ -93,7 +98,6 @@ Use the actual `_ffi` module — no mocking. These are integration tests against
 
 ## SESSION 5 [uncompleted]
 ### Stage 4 — Pygame UI
-
 Orthogonal mazes only for this stage. Build the Pygame app in `src/mazer/ui/`. Match the look and feel of the iOS app which has been copied to `.planning/referenced_resources/iOS_app/`.
 
 `renderer.py`:
@@ -114,7 +118,6 @@ Acceptance: `python -m mazer` launches a window, generates a default maze, you c
 
 ## SESSION 6 [uncompleted]
 ### Stage 5 — Integration test
-
 In `tests/test_integration.py`:
 - `test_solve_maze_by_following_solution_path`: generate a maze, walk the active cell along the `on_solution_path` cells from start to goal, asserting each move succeeds and the final cell is the goal. This exercises the full FFI → wrapper → game-logic stack without touching Pygame.
 - `test_multiple_algorithms_all_produce_valid_mazes`: parametrize over every algorithm, generate a small maze with each, assert it's solvable (start has at least one linked direction; goal is reachable via solution path).

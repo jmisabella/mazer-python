@@ -1,5 +1,7 @@
 .planning/referenced_resources/*
 
+mazer/*
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

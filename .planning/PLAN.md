@@ -108,12 +108,12 @@ Bug found and fixed during implementation (would have been a latent crash for an
 
 Test invocation note: tests run via `.venv/bin/pytest` (or `pytest` with the venv activated). All 5 FFI tests pass; the Stage 3/5 placeholders remain `@pytest.mark.skip`d.
 
-## SESSION 4 [uncompleted]
+## SESSION 4 [completed 2026-04-25]
 ### Stage 3 — Pythonic wrapper
 Build the high-level API on top of `_ffi.py`. Every test in this stage should read like a usage example — descriptive names, minimal setup, one concept per test. Tests are documentation.
 
 In `types.py`:
-- class `MazeType(str, Enum)`: `ORTHOGONAL`, `DELTA`, `RHOMBIC` with values matching the Rust strings ("Orthogonal" etc).
+- class `MazeType(str, Enum)`: `ORTHOGONAL`, `DELTA`, `RHOMBIC`, `SIGMA`, `UPSILON` with values matching the Rust strings ("Orthogonal", "Delta", "Rhombic", "Sigma", "Upsilon").
 - `class Algorithm(str, Enum)`: at minimum `WILSONS`, `HUNT_AND_KILL`, `RECURSIVE_BACKTRACKER`, `BINARY_TREE`, `SIDEWINDER`, `ALDOUS_BRODER` — string values matching Rust. Confirm the full list against the Rust source.
 - class `Direction(str, Enum)`: `UP`, `DOWN`, `LEFT`, `RIGHT`, `UPPER_LEFT`, `UPPER_RIGHT`, `LOWER_LEFT`, `LOWER_RIGHT` — values "Up", "Down", "UpperLeft", etc.
 - `@dataclass(frozen=True) class Coord: x: int, y: int`.
@@ -138,6 +138,22 @@ In `tests/test_maze.py`, write tests like:
 - `test_context_manager_destroys_on_exit` — use a weakref or counter to verify cleanup.
 
 Use the actual `_ffi` module — no mocking. These are integration tests against real Rust.
+
+#### Session 4 notes
+
+Decisions / minor deviations from the plan:
+
+- **MazeType expanded from 3 to 5 variants** (`ORTHOGONAL`, `DELTA`, `RHOMBIC`, `SIGMA`, `UPSILON`) per session decision — the FFI accepts all five, and trimming the enum now would force a `types.py` edit later when other maze types ship in the UI. Stage 3 tests still only exercise Orthogonal; the additional variants cost nothing and keep the wrapper as the full Pythonic API over the FFI.
+- **Algorithm enum lists all 13 variants** the upstream Rust accepts (`AldousBroder`, `BinaryTree`, `Ellers`, `GrowingTreeNewest`, `GrowingTreeRandom`, `HuntAndKill`, `Kruskals`, `Prims`, `RecursiveBacktracker`, `RecursiveDivision`, `ReverseDelete`, `Sidewinder`, `Wilsons`) — confirmed against `MazeAlgorithm.swift` in the iOS reference, which exposes the same FFI surface.
+- **No algorithm/maze-type compatibility validation in the enum.** The Rust side rejects bad combinations (e.g. `BinaryTree` on `Delta`) with a NULL return, which `Maze.__init__` translates into `MazeGenerationError`. Baking the compatibility table into `types.py` would couple it to upstream Rust evolution; that logic belongs in the UI/request-builder layer (Stage 4+) where it can produce useful messages.
+- **`MazeRequest.start`/`goal` omitted from JSON when `None`.** The Rust deserializer expects the keys absent, not present-and-null — verified against the Rhombic FFI test in `ffi.rs` which has neither key. Using `dataclasses.asdict` would have serialized them as `null` and broken those defaults; `to_json()` builds the dict explicitly.
+- **`Cell` is a frozen dataclass copying every FFICell field once.** Plan-mandated; the FFI memory is freed inside `Maze.cells()` before the function returns, so no caller can ever hold a reference to Rust-owned bytes. `linked` is a `frozenset[Direction]` (not list) because membership tests dominate over iteration in renderer/pathfinding code.
+- **`closed` is a public read-only property.** Plan asked for idempotent `close()`; exposing the closed-state lets tests assert lifecycle directly without touching `_closed`. Operations on a closed maze raise `RuntimeError` (rather than feeding NULL through the FFI for undefined behavior) — added a `_check_open()` guard at the top of `cells`, `move`, and `generation_steps`.
+- **`Maze.request` property added** so the future `R`-to-regenerate handler in Stage 4's UI loop can hand the original request back to a fresh `Maze(...)` without callers having to stash it themselves. Trivial accessor; no behavior beyond returning the dataclass.
+- **Tests patch `mazer.maze.lib`, not `lib.mazer_destroy`.** cffi's generated `lib` object rejects attribute assignment (`AttributeError`), so a direct `monkeypatch.setattr(lib, "mazer_destroy", ...)` doesn't work. Workaround is a small `CountingLib` proxy with `__getattr__` that wraps `mazer_destroy` and forwards everything else through unchanged, patched into the `mazer.maze` module namespace via `monkeypatch.setattr(maze_mod, "lib", ...)`. Documented inline in the test file because future readers will hit the same wall.
+- **Three extra tests beyond the plan list** (12 stage-3 tests instead of 11): `test_cells_cache_invalidated_after_move` (validates the invalidation contract the plan specifies), `test_generation_steps_empty_when_not_captured` (the negative path for the iterator), `test_zero_size_request_raises_maze_generation_error` (validates `MazeGenerationError` actually fires — plan called for the exception class but no test exercised it), and `test_close_is_idempotent` + `test_operations_after_close_raise` (cover the "don't double-free" requirement and the `RuntimeError`-after-close guard). Each maps to an explicit plan requirement that otherwise had no test.
+
+Verified: 21 passed, 1 skipped (Stage 5 placeholder). Full suite runs in ~0.03s.
 
 ## SESSION 5 [uncompleted]
 ### Stage 4 — Pygame UI

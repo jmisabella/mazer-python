@@ -196,10 +196,23 @@ Verification:
 - Visual sanity-check: rendered three representative frames to PNG (default / heatmap+solution / solved-with-overlay) under the dummy driver. Walls, A/B letters, palette, gradient, and overlay all look correct against the iOS reference.
 - Interactive acceptance (arrow-key play, real-window key toggles) requires the user at the keyboard — flagged at session start.
 
-## SESSION 6 [uncompleted]
+## SESSION 6 [completed 2026-04-26]
 ### Stage 5 — Integration test
 In `tests/test_integration.py`:
 - `test_solve_maze_by_following_solution_path`: generate a maze, walk the active cell along the `on_solution_path` cells from start to goal, asserting each move succeeds and the final cell is the goal. This exercises the full FFI → wrapper → game-logic stack without touching Pygame.
 - `test_multiple_algorithms_all_produce_valid_mazes`: parametrize over every algorithm, generate a small maze with each, assert it's solvable (start has at least one linked direction; goal is reachable via solution path).
+
+#### Session 6 notes
+
+Decisions / minor deviations from the plan:
+
+- **Direction-to-coord-offset map duplicated in the test file.** `cell.linked` returns *which walls are open* but not *which neighbor cell that opens onto*; to walk the solution path we need the inverse mapping (UP=(0,-1), DOWN=(0,1), LEFT=(-1,0), RIGHT=(1,0)). The Rust side owns the canonical mapping and we don't expose it through the FFI, so the test re-states it. Convention confirmed against the existing reasoning in `test_invalid_move_returns_false_and_grid_intact` ("at (0,0) UP and LEFT are off-grid"). Documented in the module docstring so a future reader doesn't have to re-derive it.
+- **Solver test asserts a `next_direction` exists at every step before calling `move()`.** A perfect maze guarantees the solution path is a simple chain, so the BFS-style "pick the first linked neighbor on the path we haven't visited" always finds exactly one candidate at the active cell. Failing the assertion early (with the active coord, its `linked` set, and the visited set in the message) is much more debuggable than letting `m.move(None)` blow up later or letting the loop spin.
+- **Loop guarded by `max_steps = width * height`.** Defensive belt against a hypothetical regression where the path isn't actually a chain — without the guard a broken `on_solution_path` could hang the test runner. Uses `for/else` with `pytest.fail` so the failure is "did not reach goal within N moves" instead of an assertion-stack noise. Marked `# pragma: no cover` because in correct runs the `break` always fires first.
+- **Reachability check is BFS through `on_solution_path` cells via `linked`, not just "both flags set."** Plan said "goal is reachable via solution path"; reading that strictly means the path must be a *connected chain*, not just two flagged endpoints. The BFS catches a (hypothetical) bug where `on_solution_path` gets set on disconnected cells. The first test (which actually walks the path with `move()`) is the live integration check; this one is the parametrized smoke check across all 13 algorithms.
+- **Parametrized over all 13 `Algorithm` variants.** All pass on Orthogonal at 8×8, including `BinaryTree`, `Sidewinder`, and `RecursiveDivision`. No skips needed — confirms the plan-time hypothesis from Session 4 notes that algorithm/maze-type rejections (e.g. `BinaryTree` on `Delta`) are non-Orthogonal-only.
+- **Helpers `_active`, `_start`, `_by_coord` deliberately *not* shared with `test_maze.py`.** Tests are docs; copying three one-liners keeps each file readable in isolation rather than introducing a `conftest.py` for trivial helpers. If a fourth test file shows up later, that's the time to consolidate.
+
+Verified: 35 passed, 0 skipped (was 21 + 1 placeholder before this session). Full suite still ~0.03s.
 
 

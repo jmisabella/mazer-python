@@ -155,7 +155,7 @@ Decisions / minor deviations from the plan:
 
 Verified: 21 passed, 1 skipped (Stage 5 placeholder). Full suite runs in ~0.03s.
 
-## SESSION 5 [uncompleted]
+## SESSION 5 [completed 2026-04-26]
 ### Stage 4 — Pygame UI
 Orthogonal mazes only for this stage. Build the Pygame app in `src/mazer/ui/`. Match the look and feel of the iOS app which has been copied to `.planning/referenced_resources/iOS_app/`.
 
@@ -174,6 +174,27 @@ Orthogonal mazes only for this stage. Build the Pygame app in `src/mazer/ui/`. M
 - Window title shows current algorithm and dimensions.
 
 Acceptance: `python -m mazer` launches a window, generates a default maze, you can play it, toggle heatmap, see the solution.
+
+#### Session 5 notes
+
+Defaults chosen for `python -m mazer`: 20×20 Orthogonal, Recursive Backtracker, 28px cells, `start=(0,0)`, `goal=(19,19)`, `capture_steps=False`. Window is `560×616` (560 maze + 56px HUD). Picked to land in the iOS app's "medium" cell-size band without overflowing a typical desktop window.
+
+Decisions / minor deviations from the plan:
+
+- **`N` is a Stage-4 alias for `R`.** Plan offered "open a new-maze dialog OR just read from a config — keep it simple." Pygame has no native dialog primitive and a hand-rolled modal would be substantial scope; instead `N` re-runs the current request, identical to `R`, with a code comment noting it's reserved for a real picker in a later stage. Documented in the keybinding docstring so the behavior is explicit, not implicit.
+- **iOS palette ported directly from `MazeCellAppearance.swift`/`HeatMapPalette.swift`** rather than approximated. `OFF_WHITE`, `START_COLOR` (SwiftUI `.blue`), `GOAL_COLOR` (SwiftUI `.red`), `VISITED_COLOR` (`CellColors.traversedPathColor`), and `SOLUTION_COLOR` (the documented midpoint of `vividBlue` and gray) are pulled by-hex; the heatmap default is the "Belize Hole" 10-shade gradient because it sits well over the off-white background. Wall stroke = `cell_size // 6` matches the orthogonal denominator from `wallStrokeWidth(for: .orthogonal, ...)`.
+- **Subtle row gradient kept for default cells.** The iOS code lerps cell background from a near-white tint at row 0 toward `offWhite` at the bottom row; replicated as `_default_cell_color(y, total_rows)`. Costs nothing and keeps the look-and-feel parity the plan asked for.
+- **Cell-color priority is a strict chain**: start > goal > visited > (show_solution & on_solution_path) > (show_heatmap & max_distance>0) > default-row-gradient. Mirrors `cellBackgroundColor(...)` in the iOS source. Verified against the rendered overlays frame — the heatmap and solution toggles compose correctly (solution wins where they conflict).
+- **`Renderer.maze_rect()` exposed** so `app.py` can position the "Solved!" overlay over the painted maze region without the renderer needing to know about overlay UI. Keeps render vs. game-state UI cleanly separated: renderer paints cells/walls/markers, app paints HUD + overlay.
+- **Player marker is a yellow filled circle with a thin black stroke** at the active cell's center (radius `cell_size // 4`). Distinct from start/goal/solution colors and visible across every cell-color state. The iOS app uses haptic feedback + a position highlight; we drop the haptic and rely on the visual marker.
+- **`Solved!` is both an overlay and a HUD badge.** Plan asked for an overlay; added a small green "Solved!" tag in the HUD's top-right corner too, so the state is unmistakable even with the overlay translucent. Solved is detected by `any(c.is_active and c.is_goal for c in cells)` — the game-state-via-cells pattern Stage 5's integration test will exercise.
+- **`Renderer` constructor calls `pygame.font.SysFont`**, which requires `pygame.font.init()` (done by `pygame.init()`). Documented the precondition implicitly by having `app.main()` call `pygame.init()` before constructing the renderer; not adding a defensive init inside the constructor because it would mask sequencing bugs in callers and Stage 5 tests don't construct `Renderer` directly.
+
+Verification:
+- 21 existing tests still pass, 1 Stage-5 placeholder still skipped (`pytest` ~0.02s).
+- Smoke test under `SDL_VIDEODRIVER=dummy` runs `app.main()` against a scripted event sequence (H, S, ↓, →, H, R, N, Esc) and exits cleanly — confirms init, draw, all five branches of the keydown handler, regenerate-with-cleanup, and the QUIT/Esc shutdown path all work without exceptions.
+- Visual sanity-check: rendered three representative frames to PNG (default / heatmap+solution / solved-with-overlay) under the dummy driver. Walls, A/B letters, palette, gradient, and overlay all look correct against the iOS reference.
+- Interactive acceptance (arrow-key play, real-window key toggles) requires the user at the keyboard — flagged at session start.
 
 ## SESSION 6 [uncompleted]
 ### Stage 5 — Integration test

@@ -1,11 +1,12 @@
-"""Pygame renderer for orthogonal mazes.
+"""Pygame renderers for each maze type.
 
 Look-and-feel mirrors the iOS reference app
-(``.planning/referenced_resources/iOS_app/mazer-ios/Views/MazeComponents/
-OrthogonalCellView.swift`` and ``Layout/MazeCellAppearance.swift``):
+(``.planning/referenced_resources/iOS_app/mazer-ios/Views/MazeComponents/``
+and ``Layout/MazeCellAppearance.swift``):
 
-* Wall stroke = ``cell_size // 6`` — the orthogonal denominator from
-  ``wallStrokeWidth(for: .orthogonal, ...)``.
+* Wall stroke for orthogonal = ``cell_size // 6``; for sigma it's
+  ``cell_size // 6`` at ``cell_size >= 18`` and ``cell_size // 7`` below
+  (denominator from ``wallStrokeWidth(for:cellSize:)``).
 * Heatmap default is the "Belize Hole" 10-shade gradient from
   ``HeatMapPalette.swift``; index = ``min(9, distance * 10 / max_distance)``.
 * Cell background uses ``CellColors.offWhite`` (#FFF5E6) with the same
@@ -14,17 +15,35 @@ OrthogonalCellView.swift`` and ``Layout/MazeCellAppearance.swift``):
 * Start / goal / visited / solution colors are taken directly from
   ``CellColors``.
 
-The renderer is orthogonal-only by design (Stage 4 scope). The ``Cell``
-objects it consumes already carry ``maze_type`` so a future polymorphic
-renderer can dispatch on it without changing this module's surface.
+Dispatch:
+    Both renderer classes expose ``draw(cells, show_heatmap, show_solution)``
+    and ``maze_rect(cells)``. The app picks the right one for a maze via
+    :func:`make_renderer`. Only Orthogonal and Sigma are implemented in
+    Stage 6; the other three maze types raise ``NotImplementedError`` from
+    the factory so the omission is loud rather than silent.
+
+Hex layout (Sigma):
+    Flat-top hexagons in odd-q vertical offset, ported from the iOS
+    ``SigmaCellView``/``SigmaMazeView`` pair. Unit-hexagon vertices in
+    ``cell_size`` units::
+
+        (0.5, 0)      (1.5, 0)
+        (0,   h/2)               (2, h/2)     where h = sqrt(3)
+        (0.5, h)      (1.5, h)
+
+    Direction → edge (vertex-index pair) ported from
+    ``HexDirection.vertexIndices``: UP=(0,1), UPPER_RIGHT=(1,2),
+    LOWER_RIGHT=(2,3), DOWN=(3,4), LOWER_LEFT=(4,5), UPPER_LEFT=(5,0).
 """
 
 from __future__ import annotations
 
+import math
+
 import pygame
 
 from mazer.maze import Cell
-from mazer.types import Direction
+from mazer.types import Coord, Direction, MazeType
 
 
 # --- iOS palette (CellColors / SwiftUI defaults) --------------------------
@@ -56,6 +75,9 @@ HEATMAP_BELIZE_HOLE = (
 
 BORDER_WIDTH = 4
 
+# sqrt(3) shows up everywhere in flat-top hex math — name it once.
+_SQRT3 = math.sqrt(3)
+
 
 def _interp(c1: tuple[int, int, int], c2: tuple[int, int, int], factor: float) -> tuple[int, int, int]:
     return (
@@ -80,8 +102,38 @@ def _default_cell_color(y: int, total_rows: int) -> tuple[int, int, int]:
     return _interp(start, OFF_WHITE, y / (total_rows - 1))
 
 
-class Renderer:
-    """Renders an orthogonal maze onto a Pygame surface.
+def cell_color(
+    cell: Cell,
+    max_distance: int,
+    total_rows: int,
+    show_heatmap: bool,
+    show_solution: bool,
+    palette,
+) -> tuple[int, int, int]:
+    """Decision chain for a cell's fill color.
+
+    Mirrors ``cellBackgroundColor(...)`` in the iOS code: start > goal >
+    visited > (solution overlay) > (heatmap) > default-row-gradient.
+    Shared between every renderer so toggle behavior stays identical.
+    """
+    if cell.is_start:
+        return START_COLOR
+    if cell.is_goal:
+        return GOAL_COLOR
+    if cell.is_visited:
+        return VISITED_COLOR
+    if show_solution and cell.on_solution_path:
+        return SOLUTION_COLOR
+    if show_heatmap and max_distance > 0:
+        return _heatmap_color(cell.distance, max_distance, palette)
+    return _default_cell_color(cell.coord.y, total_rows)
+
+
+# --- Orthogonal -----------------------------------------------------------
+
+
+class OrthogonalRenderer:
+    """Renders an orthogonal (square-cell) maze onto a Pygame surface.
 
     ``offset`` shifts the maze inside the surface so the caller can reserve
     pixels at the top for a HUD without the renderer needing to know about it.
@@ -107,20 +159,19 @@ class Renderer:
         max_distance = max(c.distance for c in cells)
         total_cols = max(c.coord.x for c in cells) + 1
         total_rows = max(c.coord.y for c in cells) + 1
-        maze_rect = pygame.Rect(
+        rect = pygame.Rect(
             self.offset_x,
             self.offset_y,
             total_cols * self.cell_size,
             total_rows * self.cell_size,
         )
 
-        pygame.draw.rect(self.surface, OFF_WHITE, maze_rect)
+        pygame.draw.rect(self.surface, OFF_WHITE, rect)
         for cell in cells:
             self._draw_cell(cell, max_distance, total_rows, show_heatmap, show_solution)
-        pygame.draw.rect(self.surface, BORDER_COLOR, maze_rect, BORDER_WIDTH)
+        pygame.draw.rect(self.surface, BORDER_COLOR, rect, BORDER_WIDTH)
 
     def maze_rect(self, cells: list[Cell]) -> pygame.Rect:
-        """Bounding rect of the painted maze (for overlays drawn by the app)."""
         cols = max((c.coord.x for c in cells), default=0) + 1
         rows = max((c.coord.y for c in cells), default=0) + 1
         return pygame.Rect(
@@ -135,26 +186,6 @@ class Renderer:
             self.cell_size,
         )
 
-    def _cell_color(
-        self,
-        cell: Cell,
-        max_distance: int,
-        total_rows: int,
-        show_heatmap: bool,
-        show_solution: bool,
-    ) -> tuple[int, int, int]:
-        if cell.is_start:
-            return START_COLOR
-        if cell.is_goal:
-            return GOAL_COLOR
-        if cell.is_visited:
-            return VISITED_COLOR
-        if show_solution and cell.on_solution_path:
-            return SOLUTION_COLOR
-        if show_heatmap and max_distance > 0:
-            return _heatmap_color(cell.distance, max_distance, self.palette)
-        return _default_cell_color(cell.coord.y, total_rows)
-
     def _draw_cell(
         self,
         cell: Cell,
@@ -166,7 +197,7 @@ class Renderer:
         rect = self._cell_rect(cell.coord.x, cell.coord.y)
         pygame.draw.rect(
             self.surface,
-            self._cell_color(cell, max_distance, total_rows, show_heatmap, show_solution),
+            cell_color(cell, max_distance, total_rows, show_heatmap, show_solution, self.palette),
             rect,
         )
 
@@ -201,4 +232,288 @@ class Renderer:
         self.surface.blit(text, text.get_rect(center=rect.center))
 
 
-__all__ = ["Renderer", "OFF_WHITE", "HEATMAP_BELIZE_HOLE"]
+# --- Sigma (hexagonal) ----------------------------------------------------
+
+def hex_offset_delta(direction: Direction, is_odd_column: bool) -> tuple[int, int] | None:
+    """*Standard* coord offset for a sigma move in odd-q vertical layout.
+
+    Returns ``None`` for non-hex directions. Ported from
+    ``HexDirection.offsetDelta(isOddColumn:)`` in the iOS reference. This
+    is the geometric offset assuming no boundary clamps — see
+    :func:`hex_candidate_deltas` for the clamp-aware version.
+    """
+    if direction == Direction.UP:
+        return (0, -1)
+    if direction == Direction.DOWN:
+        return (0, 1)
+    if direction == Direction.UPPER_RIGHT:
+        return (1, 0) if is_odd_column else (1, -1)
+    if direction == Direction.LOWER_RIGHT:
+        return (1, 1) if is_odd_column else (1, 0)
+    if direction == Direction.LOWER_LEFT:
+        return (-1, 1) if is_odd_column else (-1, 0)
+    if direction == Direction.UPPER_LEFT:
+        return (-1, 0) if is_odd_column else (-1, -1)
+    return None
+
+
+def hex_candidate_deltas(
+    direction: Direction, col: int, row: int, height: int
+) -> list[tuple[int, int]]:
+    """All offsets a sigma direction could refer to, including Rust-clamp variants.
+
+    The Rust library's ``assign_neighbors_sigma`` clamps ``north_diagonal``
+    to the cell's own row at the top (for even cols) and ``south_diagonal``
+    at the bottom (for odd cols). When the clamp triggers, both
+    upper/lower diagonals on that side end up pointing to the same
+    neighbor, and ``Cell.set_open_walls`` (via ``HashMap::find``) keeps
+    only the first one — which may not be the *physically* accurate name.
+
+    The clamp only fires on the boundary rows (top for even cols, bottom
+    for odd cols). Adding the alternate offset off-boundary would make
+    callers think a non-existent link exists — at non-boundary cells the
+    alternate offset points to a *different* physical neighbor that
+    happens to share the same direction name on neither side.
+    """
+    is_odd_column = (col & 1) == 1
+    standard = hex_offset_delta(direction, is_odd_column)
+    if standard is None:
+        return []
+    candidates = [standard]
+    on_top_even_edge = not is_odd_column and row == 0
+    on_bottom_odd_edge = is_odd_column and row == height - 1
+    if direction in (Direction.UPPER_LEFT, Direction.UPPER_RIGHT) and on_top_even_edge:
+        candidates.append((standard[0], 0))
+    elif direction in (Direction.LOWER_LEFT, Direction.LOWER_RIGHT) and on_bottom_odd_edge:
+        candidates.append((standard[0], 0))
+    return candidates
+
+
+# Each cell's six physical hex edges, expressed as (vertex-index pair,
+# delta to the neighbor's coord). Indexed by ``is_odd_column`` because the
+# odd-q-vertical layout shifts diagonal neighbors by ±1 row.
+_PHYSICAL_HEX_EDGES_EVEN: tuple[tuple[tuple[int, int], tuple[int, int]], ...] = (
+    ((0, 1), (0, -1)),    # UP edge
+    ((1, 2), (1, -1)),    # upper-right edge
+    ((2, 3), (1, 0)),     # lower-right edge
+    ((3, 4), (0, 1)),     # DOWN edge
+    ((4, 5), (-1, 0)),    # lower-left edge
+    ((5, 0), (-1, -1)),   # upper-left edge
+)
+
+_PHYSICAL_HEX_EDGES_ODD: tuple[tuple[tuple[int, int], tuple[int, int]], ...] = (
+    ((0, 1), (0, -1)),    # UP edge
+    ((1, 2), (1, 0)),     # upper-right edge
+    ((2, 3), (1, 1)),     # lower-right edge
+    ((3, 4), (0, 1)),     # DOWN edge
+    ((4, 5), (-1, 1)),    # lower-left edge
+    ((5, 0), (-1, 0)),    # upper-left edge
+)
+
+
+class SigmaRenderer:
+    """Renders a sigma (flat-top hexagonal) maze onto a Pygame surface.
+
+    Layout is odd-q vertical offset, matching the iOS reference. The
+    bounding box of the painted region is
+    ``(cell_size * (1.5*cols + 0.5), hex_height * (rows + 0.5))`` where
+    ``hex_height = sqrt(3) * cell_size``.
+
+    Wall drawing checks both sides of every edge: a wall is rendered only
+    if neither this cell nor its neighbor lists the connecting direction
+    in ``linked``. Mirrors ``SigmaCellView``'s ``!(linked || neighborLink)``
+    guard — defensive against any (hypothetical) one-sided link.
+    """
+
+    def __init__(
+        self,
+        surface: pygame.Surface,
+        cell_size: int,
+        offset: tuple[int, int] = (0, 0),
+        palette=HEATMAP_BELIZE_HOLE,
+    ) -> None:
+        self.surface = surface
+        self.cell_size = cell_size
+        self.offset_x, self.offset_y = offset
+        self.palette = palette
+        self.hex_height = _SQRT3 * cell_size
+        # Sigma stroke denominator from MazeCellAppearance.swift.
+        denom = 6 if cell_size >= 18 else 7
+        self.wall_width = max(1, cell_size // denom)
+        self._marker_font = pygame.font.SysFont(None, max(14, int(cell_size * 0.9)))
+
+    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool) -> None:
+        if not cells:
+            return
+        max_distance = max(c.distance for c in cells)
+        total_rows = max(c.coord.y for c in cells) + 1
+        by_coord = {c.coord: c for c in cells}
+        # Precompute the set of unordered linked coord-pairs. Iterating
+        # direction-name → candidate-offset → first-existing-neighbor
+        # avoids the boundary-clamp pitfall where the FFI's
+        # ``set_open_walls`` reports a direction name whose standard
+        # offset doesn't match the physical neighbor.
+        linked_pairs = self._build_linked_pairs(cells, by_coord)
+
+        bbox = self.maze_rect(cells)
+        pygame.draw.rect(self.surface, OFF_WHITE, bbox)
+
+        for cell in cells:
+            self._draw_cell(
+                cell, by_coord, linked_pairs, max_distance, total_rows, show_heatmap, show_solution
+            )
+
+        pygame.draw.rect(self.surface, BORDER_COLOR, bbox, BORDER_WIDTH)
+
+    @staticmethod
+    def _build_linked_pairs(
+        cells: list[Cell], by_coord: dict[Coord, Cell]
+    ) -> set[frozenset[Coord]]:
+        """Resolve direction-name links into geometric coord pairs.
+
+        For each direction name in ``cell.linked``, walk the candidate
+        offsets and pick the first one that lands on an existing cell.
+        This is what makes wall drawing tolerant of the Rust clamp's
+        direction-name ambiguity at top-row even-col / bottom-row odd-col
+        boundaries.
+        """
+        height = max((c.coord.y for c in cells), default=0) + 1
+        pairs: set[frozenset[Coord]] = set()
+        for cell in cells:
+            for direction in cell.linked:
+                for dx, dy in hex_candidate_deltas(
+                    direction, cell.coord.x, cell.coord.y, height
+                ):
+                    target = Coord(cell.coord.x + dx, cell.coord.y + dy)
+                    if target in by_coord:
+                        pairs.add(frozenset({cell.coord, target}))
+                        break
+        return pairs
+
+    def maze_rect(self, cells: list[Cell]) -> pygame.Rect:
+        cols = max((c.coord.x for c in cells), default=0) + 1
+        rows = max((c.coord.y for c in cells), default=0) + 1
+        width = int(round(self.cell_size * (1.5 * cols + 0.5)))
+        height = int(round(self.hex_height * (rows + 0.5)))
+        return pygame.Rect(self.offset_x, self.offset_y, width, height)
+
+    def _vertex(self, q: int, r: int, vertex_index: int) -> tuple[float, float]:
+        """Absolute (x, y) of the given vertex of cell (q, r).
+
+        Local unit vertices (in cell_size units) are::
+
+            0: (0.5, 0)     1: (1.5, 0)     2: (2,   h/2)
+            5: (0,   h/2)                   3: (1.5, h)
+                            4: (0.5, h)
+        """
+        # Local vertex offsets from the cell's bounding-rect origin.
+        local = (
+            (0.5, 0.0),
+            (1.5, 0.0),
+            (2.0, _SQRT3 / 2),
+            (1.5, _SQRT3),
+            (0.5, _SQRT3),
+            (0.0, _SQRT3 / 2),
+        )[vertex_index]
+        # Cell bounding-rect origin in absolute coords. Odd columns shift
+        # down by half a hex (odd-q vertical offset).
+        q_odd_shift = self.hex_height / 2 if (q & 1) == 1 else 0.0
+        origin_x = self.offset_x + self.cell_size * 1.5 * q
+        origin_y = self.offset_y + self.hex_height * r + q_odd_shift
+        return (origin_x + local[0] * self.cell_size, origin_y + local[1] * self.cell_size)
+
+    def _cell_polygon(self, q: int, r: int) -> list[tuple[float, float]]:
+        return [self._vertex(q, r, i) for i in range(6)]
+
+    def _cell_center(self, q: int, r: int) -> tuple[float, float]:
+        q_odd_shift = self.hex_height / 2 if (q & 1) == 1 else 0.0
+        cx = self.offset_x + self.cell_size * (1.5 * q + 1)
+        cy = self.offset_y + self.hex_height * (r + 0.5) + q_odd_shift
+        return (cx, cy)
+
+    def _draw_cell(
+        self,
+        cell: Cell,
+        by_coord: dict[Coord, Cell],
+        linked_pairs: set[frozenset[Coord]],
+        max_distance: int,
+        total_rows: int,
+        show_heatmap: bool,
+        show_solution: bool,
+    ) -> None:
+        q, r = cell.coord.x, cell.coord.y
+        polygon = self._cell_polygon(q, r)
+        pygame.draw.polygon(
+            self.surface,
+            cell_color(cell, max_distance, total_rows, show_heatmap, show_solution, self.palette),
+            polygon,
+        )
+
+        # Iterate physical edges: for each edge, the geometry tells us which
+        # neighbor coord it abuts. Skip the wall iff that pair is in
+        # ``linked_pairs``. Geometry-driven, so the Rust direction-name
+        # clamp at corners doesn't produce visual artifacts here.
+        edges = _PHYSICAL_HEX_EDGES_ODD if (q & 1) == 1 else _PHYSICAL_HEX_EDGES_EVEN
+        for (i, j), (dx, dy) in edges:
+            neighbor_coord = Coord(q + dx, r + dy)
+            if neighbor_coord in by_coord and frozenset({cell.coord, neighbor_coord}) in linked_pairs:
+                continue
+            pygame.draw.line(self.surface, WALL_COLOR, polygon[i], polygon[j], self.wall_width)
+
+        center = self._cell_center(q, r)
+        center_int = (int(round(center[0])), int(round(center[1])))
+
+        if cell.is_start:
+            self._draw_letter(center_int, "A")
+        elif cell.is_goal:
+            self._draw_letter(center_int, "B")
+
+        if cell.is_active:
+            radius = max(3, self.cell_size // 3)
+            pygame.draw.circle(self.surface, ACTIVE_MARKER_COLOR, center_int, radius)
+            pygame.draw.circle(self.surface, WALL_COLOR, center_int, radius, max(1, self.wall_width // 2))
+
+    def _draw_letter(self, center: tuple[int, int], letter: str) -> None:
+        text = self._marker_font.render(letter, True, LETTER_COLOR)
+        self.surface.blit(text, text.get_rect(center=center))
+
+
+# --- Dispatch -------------------------------------------------------------
+
+
+def make_renderer(
+    maze_type: MazeType,
+    surface: pygame.Surface,
+    cell_size: int,
+    offset: tuple[int, int] = (0, 0),
+    palette=HEATMAP_BELIZE_HOLE,
+):
+    """Return the renderer matching a maze type. Raises for unimplemented types.
+
+    Stage 6 implements Orthogonal and Sigma. Delta / Rhombic / Upsilon
+    raise ``NotImplementedError`` rather than silently falling back so a
+    caller asking for them gets a clear error pointing at this function.
+    """
+    if maze_type == MazeType.ORTHOGONAL:
+        return OrthogonalRenderer(surface, cell_size, offset=offset, palette=palette)
+    if maze_type == MazeType.SIGMA:
+        return SigmaRenderer(surface, cell_size, offset=offset, palette=palette)
+    raise NotImplementedError(f"No renderer implemented for {maze_type.value} (Stage 6 covers Orthogonal + Sigma)")
+
+
+# Back-compat: existing callers still reference ``Renderer`` for the
+# orthogonal renderer. Keep the alias rather than churning every import.
+Renderer = OrthogonalRenderer
+
+
+__all__ = [
+    "HEATMAP_BELIZE_HOLE",
+    "OFF_WHITE",
+    "OrthogonalRenderer",
+    "Renderer",
+    "SigmaRenderer",
+    "cell_color",
+    "hex_candidate_deltas",
+    "hex_offset_delta",
+    "make_renderer",
+]

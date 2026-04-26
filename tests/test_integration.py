@@ -30,6 +30,61 @@ _ORTHOGONAL_OFFSETS: dict[Direction, tuple[int, int]] = {
 }
 
 
+def _sigma_candidate_deltas(
+    direction: Direction, col: int, row: int, height: int
+) -> list[tuple[int, int]]:
+    """All offsets a sigma direction *could* refer to from a given cell.
+
+    Inlined here rather than imported from ``mazer.ui.renderer`` so the
+    test file stays free of pygame imports. See the renderer module for
+    the explanation; in short, the Rust library's ``set_open_walls`` (in
+    ``cell.rs``) keeps only the first matching direction name when two
+    HashMap entries point to the same neighbor. The collision only
+    happens on boundary rows (top for even cols, bottom for odd cols)
+    where ``assign_neighbors_sigma`` clamps to avoid underflow/overflow.
+
+    Adding the clamp variant unconditionally was a real bug: at
+    non-boundary cells the alternate offset points to a *different*
+    physical neighbor that happens to share neither side's direction
+    name, so the picker would think a forward move existed when the
+    Rust-side ``move`` actually lands somewhere else.
+    """
+    is_odd = (col & 1) == 1
+    if direction == Direction.UP:
+        return [(0, -1)]
+    if direction == Direction.DOWN:
+        return [(0, 1)]
+    standard: tuple[int, int] | None = None
+    if is_odd:
+        if direction == Direction.UPPER_LEFT:
+            standard = (-1, 0)
+        elif direction == Direction.UPPER_RIGHT:
+            standard = (1, 0)
+        elif direction == Direction.LOWER_LEFT:
+            standard = (-1, 1)
+        elif direction == Direction.LOWER_RIGHT:
+            standard = (1, 1)
+    else:
+        if direction == Direction.UPPER_LEFT:
+            standard = (-1, -1)
+        elif direction == Direction.UPPER_RIGHT:
+            standard = (1, -1)
+        elif direction == Direction.LOWER_LEFT:
+            standard = (-1, 0)
+        elif direction == Direction.LOWER_RIGHT:
+            standard = (1, 0)
+    if standard is None:
+        return []
+    candidates = [standard]
+    on_top_even_edge = not is_odd and row == 0
+    on_bottom_odd_edge = is_odd and row == height - 1
+    if direction in (Direction.UPPER_LEFT, Direction.UPPER_RIGHT) and on_top_even_edge:
+        candidates.append((standard[0], 0))
+    elif direction in (Direction.LOWER_LEFT, Direction.LOWER_RIGHT) and on_bottom_odd_edge:
+        candidates.append((standard[0], 0))
+    return candidates
+
+
 def _by_coord(cells: list[Cell]) -> dict[Coord, Cell]:
     return {c.coord: c for c in cells}
 
@@ -123,6 +178,67 @@ def test_solve_maze_by_following_solution_path() -> None:
                     and target not in visited
                 ):
                     next_direction = direction
+                    break
+            assert next_direction is not None, (
+                f"no forward solution-path move from {active.coord}; "
+                f"linked={active.linked}, visited={visited}"
+            )
+            assert m.move(next_direction) is True, (
+                f"move {next_direction} from {active.coord} unexpectedly rejected"
+            )
+        else:  # pragma: no cover - guard against an infinite loop on a regression
+            pytest.fail(f"did not reach goal within {max_steps} moves")
+
+        final_active = _active(m.cells())
+        assert final_active.is_goal
+        assert final_active.coord == Coord(width - 1, height - 1)
+
+
+def test_solve_sigma_maze_by_following_solution_path() -> None:
+    """Same path-walk pattern as the Orthogonal solver, but on a hex grid.
+
+    Proves the FFI + wrapper handle hex linkage round-trip end-to-end:
+    every linked direction the Rust side reports must also be a valid
+    move, and the hex offset deltas the renderer uses must agree with
+    the cell coordinates the FFI returns. Six directions instead of four,
+    and the odd-q vertical layout means the offset for diagonals depends
+    on whether the active column is odd.
+    """
+    width, height = 8, 8
+    request = MazeRequest(
+        maze_type=MazeType.SIGMA,
+        width=width,
+        height=height,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0),
+        goal=Coord(width - 1, height - 1),
+    )
+
+    with Maze(request) as m:
+        visited: set[Coord] = set()
+        max_steps = width * height
+        for _ in range(max_steps):
+            cells = m.cells()
+            active = _active(cells)
+            visited.add(active.coord)
+            if active.is_goal:
+                break
+            by_coord = _by_coord(cells)
+            next_direction: Direction | None = None
+            for direction in active.linked:
+                for dx, dy in _sigma_candidate_deltas(
+                    direction, active.coord.x, active.coord.y, height
+                ):
+                    target = Coord(active.coord.x + dx, active.coord.y + dy)
+                    neighbor = by_coord.get(target)
+                    if (
+                        neighbor is not None
+                        and neighbor.on_solution_path
+                        and target not in visited
+                    ):
+                        next_direction = direction
+                        break
+                if next_direction is not None:
                     break
             assert next_direction is not None, (
                 f"no forward solution-path move from {active.coord}; "

@@ -262,7 +262,7 @@ The renderer's hex-edge math came out clean (a literal port of `SigmaCellView`/`
 
 Verified: 39 passed (was 35 + 0 skipped before this session). Sigma test reruns 30/30 across different RNG seeds. Full suite ~0.34s.
 
-## SESSION 8 [uncompleted]
+## SESSION 8 [completed 2026-04-26]
 ### Stage 7 — Better movement input for sigma (chord arrow keys + mouse/trackpad)
 
 Motivation from Session 7 user feedback: the Q/E/Z/C hex-roguelike layout is awkward for someone whose hands aren't already trained on it; in particular, `E` for UPPER_RIGHT didn't feel like a "move up-and-right" gesture. Two enhancements, both additive (don't break the existing key map):
@@ -298,3 +298,40 @@ Motivation from Session 7 user feedback: the Q/E/Z/C hex-roguelike layout is awk
 - Clicking on an adjacent linked cell moves the player there.
 - Existing Q/E/Z/C and arrow-only inputs still work (this session adds, doesn't replace).
 - The active cell shows which directions are currently open so "key didn't move me" is never ambiguous.
+
+#### Session 8 notes
+
+Major design pivot from the plan-time framing, surfaced by reading the Rust source before coding:
+
+- **The Rust `make_move` already implements forgiving fallback for every direction on every maze type** (`mazer/src/grid.rs:264-348`). E.g. `UpperRight` tries `UpperRight` → `Up` → `Right` in order, returning the first that's both linked and a real neighbor. So sending an "orthogonal-incompatible" diagonal like `UpperRight` on a square grid *isn't* invalid — the Rust resolves it to Up if open, else Right. This matches the iOS app's "liberal/natural" feel that the user described, even though the iOS *UI* exposes only 4 cardinal buttons on orthogonal (`MazeRenderView.swift:69` → `FourWayControlView`) and never actually exercises the diagonal fallback for that maze type.
+- **Implication for chord arrows: chords work everywhere, no per-maze-type branching needed.** `↑+→` always resolves to `Direction.UPPER_RIGHT` and is sent straight to the FFI; the Rust handles whatever fallback is appropriate for the current maze type. Avoided the original "design call" of (a) ignore chords on orthogonal vs (b) round-toward-cardinal: option (c) — pass through unchanged and let the Rust do its job — is both simpler in our code *and* more permissive at the gameplay layer.
+- **No special-case logic in the Python wrapper.** `Maze.move(direction)` is unchanged; chord resolver returns one of eight directions; FFI does the rest. The whole "chord on orthogonal" problem dissolved when I read `grid.rs` instead of speculating from the iOS UI.
+
+Implementation:
+
+- **Chord resolver is a pure function** (`_resolve_chord(up, down, left, right) -> Direction | None`). XOR-based axis cancellation: `UP+DOWN` cancels vertical, `LEFT+RIGHT` cancels horizontal, so e.g. `UP+DOWN+RIGHT` resolves to `RIGHT` (which avoids "stuck not moving" when a finger lingers on an arrow that opposes intent). Diagonals win over cardinals when both axes are pressed. Drives a 14-row parametrized table test that locks in the matrix without booting the UI.
+- **"Consumed until KEYUP" tracking on chord fire.** When the resolved direction comes from a multi-arrow chord, every currently-held arrow gets added to `arrows_consumed` and skipped on its next KEYDOWN. The matching KEYUP discards. Prevents the case where two arrows pressed in the same frame fire one chord move plus one cardinal move from the second arrow's KEYDOWN. Pygame doesn't enable key repeat by default, but the consumption guard also protects users who've turned it on externally.
+- **Mouse click-to-move** (`MOUSEBUTTONDOWN button=1`). Each renderer exposes `cell_at(pos, cells) -> Coord | None`:
+    - Orthogonal: bounds-check against `maze_rect`, then floor-divide to grid coord.
+    - Sigma: closest-center scan over all cells, then ray-cast point-in-polygon on the chosen hex. The verify pass matters — closest-center alone resolves a click in a sliver between two hex centers to the wrong cell.
+  Direction lookup (`_direction_for_click` in `app.py`) dispatches to `orthogonal_direction(active.coord, target)` (trivial dx/dy → Direction map) or `sigma_direction(active, target, cells)`. The sigma version reads the direction name *from `active.linked`* by iterating each linked direction and trying its candidate offsets — this sidesteps the boundary-clamp ambiguity by using the exact name the FFI itself recorded for that link.
+- **`SigmaRenderer._build_linked_pairs` promoted to module-level `build_sigma_linked_pairs`** per the plan, so click-handling and any future minimap/overlay code can reuse it without poking inside the renderer class.
+- **Open-exit dots on the active cell** for both maze types (plan was sigma-only "lit dots", user agreed to apply universally). Small white dots with a thin black outline, placed ~60% of the way from the cell center to each open edge midpoint:
+    - Orthogonal: 4-direction edge midpoints from `ORTHO_OFFSETS`.
+    - Sigma: resolved by walking each direction in `cell.linked` through `hex_candidate_deltas`, finding the matching physical edge in `_PHYSICAL_HEX_EDGES_*`, and drawing at that edge's vertex-pair midpoint. Same boundary-clamp tolerance as the wall-drawing path; uses a `seen_edges` set so the clamp's two-names-one-edge case doesn't double-draw a dot.
+- **`ORTHOGONAL_KEYS` and `SIGMA_KEYS`'s arrow entries are now dead paths** (arrow handling intercepts before reaching `key_map[event.key]`). Left them in for self-documentation — the maps still read as the "complete input mapping" for each type. The actual sigma letter keys (W/Q/E/Z/X/C) still flow through `key_map` since they're not arrows.
+- **HUD hint updated** per maze type: ortho shows `"arrows + diag chords + click to move"`, sigma shows `"arrow chords / W·Q·E·Z·X·C / click to move"`. Module docstring rewritten to lead with the chord+click model and treat the sigma letter layout as legacy muscle-memory affordance.
+
+Skipped optionals (kept scope tight):
+
+- **No hover-highlight on the cursor cell.** Click target is unambiguous from the cursor; the open-exit dots already make valid moves visible. Adding hover would mean per-frame `pygame.mouse.get_pos()` polling and a renderer-aware highlight pass — not free, and not user-requested. Easy to add later.
+- **No "blocked move flash" on illegal clicks.** A click on a non-adjacent or wall-blocked cell silently no-ops. Same UX as the iOS app's D-pad pressing a disabled button. Adding flash would require renderer state for fade-out timing.
+
+About the original "E for UPPER_RIGHT didn't work" report: confirmed the binding was always correct (`pygame.K_e: Direction.UPPER_RIGHT`). Most likely the active cell at the time genuinely didn't have an open upper-right edge — `move()` returns False silently for blocked moves, so the player has no signal. The open-exit dots fix this directly: any future "key didn't move me" can be checked at a glance.
+
+Verification:
+
+- 57 tests pass (was 39 before this session; +18 across `test_resolve_chord_matrix` (14 rows), `test_orthogonal_cell_at_resolves_clicks`, `test_sigma_cell_at_resolves_clicks`, `test_orthogonal_direction_lookup`, `test_sigma_direction_lookup_returns_linked_name`).
+- Smoke-test under `SDL_VIDEODRIVER=dummy`: `app.main([])` (orthogonal) and `app.main(['--type', 'sigma'])` both run a scripted event sequence (chord arrow KEYDOWN/KEYUP pairs, single-button mouse clicks, sigma letter keys, H/S/R/N, Esc) and exit cleanly. **Caveat**: under the dummy driver, `pygame.key.get_pressed()` doesn't reflect posted events, so the smoke-test only covers no-exception behavior of the chord branch. The pure-function `test_resolve_chord_matrix` covers the resolver itself; their conjunction gives high confidence in the chord path. Real chord behavior still requires interactive verification by the user at a real keyboard.
+- Visual sanity-check PNGs (orthogonal 6×6 + sigma 5×5) confirm open-exit dots appear at the active cell's open edges in both maze types.
+- Sigma boundary-clamp behavior unchanged — `sigma_direction` and `build_sigma_linked_pairs` use the same `hex_candidate_deltas` path the renderer was already using, so the existing `test_solve_sigma_maze_by_following_solution_path` continues to pass.

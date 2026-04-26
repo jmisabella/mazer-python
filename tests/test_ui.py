@@ -105,3 +105,159 @@ def test_make_renderer_dispatch() -> None:
     assert isinstance(make_renderer(MazeType.SIGMA, surface, 20), SigmaRenderer)
     with pytest.raises(NotImplementedError):
         make_renderer(MazeType.DELTA, surface, 20)
+
+
+# --- Chord arrow resolver -------------------------------------------------
+
+@pytest.mark.parametrize(
+    "up,down,left,right,expected",
+    [
+        # Single-arrow cardinals.
+        (True, False, False, False, "Up"),
+        (False, True, False, False, "Down"),
+        (False, False, True, False, "Left"),
+        (False, False, False, True, "Right"),
+        # Diagonal chords.
+        (True, False, False, True, "UpperRight"),
+        (True, False, True, False, "UpperLeft"),
+        (False, True, False, True, "LowerRight"),
+        (False, True, True, False, "LowerLeft"),
+        # Opposing-axis cancels: UP+DOWN cancels vertical, RIGHT remains.
+        (True, True, False, True, "Right"),
+        (True, True, True, False, "Left"),
+        # LEFT+RIGHT cancels horizontal, UP remains.
+        (True, False, True, True, "Up"),
+        (False, True, True, True, "Down"),
+        # Both axes cancel — nothing meaningful to fire.
+        (True, True, True, True, None),
+        # Nothing held — None (defensive; KEYDOWN should never reach this).
+        (False, False, False, False, None),
+    ],
+)
+def test_resolve_chord_matrix(up, down, left, right, expected) -> None:
+    """Held-arrow combinations resolve to the right Direction."""
+    from mazer.types import Direction
+    from mazer.ui.app import _resolve_chord
+
+    result = _resolve_chord(up, down, left, right)
+    if expected is None:
+        assert result is None
+    else:
+        assert result == Direction(expected)
+
+
+# --- Hit-test ------------------------------------------------------------
+
+def test_orthogonal_cell_at_resolves_clicks() -> None:
+    """Click coords inside the orthogonal grid map back to the right cell."""
+    from mazer.ui.renderer import OrthogonalRenderer
+    from mazer.types import Coord
+
+    surface = pygame.Surface((200, 200))
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=4,
+        height=4,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0),
+        goal=Coord(3, 3),
+    )
+    cell_size = 25
+    offset = (10, 30)
+    renderer = OrthogonalRenderer(surface, cell_size=cell_size, offset=offset)
+    with Maze(request) as m:
+        cells = m.cells()
+        # Click in the dead-center of (2, 1).
+        center = (offset[0] + 2 * cell_size + cell_size // 2,
+                  offset[1] + 1 * cell_size + cell_size // 2)
+        assert renderer.cell_at(center, cells) == Coord(2, 1)
+        # A click in the HUD area (above offset_y) should resolve to None.
+        assert renderer.cell_at((offset[0] + 5, 5), cells) is None
+        # A click well to the right of the maze should resolve to None.
+        assert renderer.cell_at((offset[0] + cell_size * 10, offset[1] + 5), cells) is None
+
+
+def test_sigma_cell_at_resolves_clicks() -> None:
+    """Sigma point-in-polygon hit-test lands on the cell the click is inside."""
+    from mazer.ui.renderer import SigmaRenderer
+    from mazer.types import Coord
+
+    surface = pygame.Surface((400, 400))
+    request = MazeRequest(
+        maze_type=MazeType.SIGMA,
+        width=4,
+        height=4,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0),
+        goal=Coord(3, 3),
+    )
+    renderer = SigmaRenderer(surface, cell_size=24, offset=(10, 30))
+    with Maze(request) as m:
+        cells = m.cells()
+        # Click on each cell's exact center → must resolve to that cell.
+        for cell in cells:
+            cx, cy = renderer._cell_center(cell.coord.x, cell.coord.y)
+            assert renderer.cell_at((int(cx), int(cy)), cells) == cell.coord, (
+                f"center of {cell.coord} resolved wrong"
+            )
+        # Click in the HUD area (above offset_y) should resolve to None.
+        assert renderer.cell_at((20, 5), cells) is None
+
+
+# --- Direction lookup ----------------------------------------------------
+
+def test_orthogonal_direction_lookup() -> None:
+    from mazer.types import Coord, Direction
+    from mazer.ui.renderer import orthogonal_direction
+
+    assert orthogonal_direction(Coord(2, 2), Coord(2, 1)) == Direction.UP
+    assert orthogonal_direction(Coord(2, 2), Coord(2, 3)) == Direction.DOWN
+    assert orthogonal_direction(Coord(2, 2), Coord(1, 2)) == Direction.LEFT
+    assert orthogonal_direction(Coord(2, 2), Coord(3, 2)) == Direction.RIGHT
+    # Non-adjacent or diagonal returns None.
+    assert orthogonal_direction(Coord(2, 2), Coord(3, 3)) is None
+    assert orthogonal_direction(Coord(2, 2), Coord(2, 4)) is None
+    assert orthogonal_direction(Coord(2, 2), Coord(2, 2)) is None
+
+
+def test_sigma_direction_lookup_returns_linked_name() -> None:
+    """For every direction in a cell's ``linked`` set, the lookup recovers it.
+
+    Drives the test from each (cell, direction-in-linked) pair so we cover
+    the boundary-clamp asymmetry: at a top-row even-col cell the FFI may
+    keep only one of (UpperRight/LowerRight) in ``linked``, but whichever
+    name is there should round-trip cleanly through ``sigma_direction``.
+    """
+    from mazer.types import Coord
+    from mazer.ui.renderer import hex_candidate_deltas, sigma_direction
+
+    request = MazeRequest(
+        maze_type=MazeType.SIGMA,
+        width=5,
+        height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0),
+        goal=Coord(4, 4),
+    )
+    with Maze(request) as m:
+        cells = m.cells()
+        by_coord = {c.coord: c for c in cells}
+        height = max(c.coord.y for c in cells) + 1
+        for cell in cells:
+            for direction in cell.linked:
+                # Resolve the geometric target via the same candidate-deltas
+                # path the renderer uses.
+                target: Coord | None = None
+                for dx, dy in hex_candidate_deltas(
+                    direction, cell.coord.x, cell.coord.y, height
+                ):
+                    candidate = Coord(cell.coord.x + dx, cell.coord.y + dy)
+                    if candidate in by_coord:
+                        target = candidate
+                        break
+                assert target is not None, (
+                    f"linked direction {direction} from {cell.coord} doesn't reach any cell"
+                )
+                returned = sigma_direction(cell, target, cells)
+                assert returned is not None
+                assert returned in cell.linked

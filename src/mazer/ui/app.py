@@ -11,28 +11,37 @@ CLI:
     python -m mazer --type sigma        # hexagonal grid
     python -m mazer --type sigma --width 13 --height 11 --algo HuntAndKill
 
-Key bindings:
-    Orthogonal:
-        Arrow keys       Move (UP / DOWN / LEFT / RIGHT)
-    Sigma (six directions, "hex roguelike" layout):
-        ↑ or W           UP
-        ↓ or X           DOWN
-        Q                UPPER_LEFT
-        E                UPPER_RIGHT
-        Z                LOWER_LEFT
-        C                LOWER_RIGHT
-    Common:
-        H                Toggle heatmap overlay
-        S                Toggle solution-path overlay
-        R                Regenerate with the current request (same params)
-        N                "New maze" — Stage-4 alias for R; reserved for a
-                         real picker dialog later. Behaves identically.
-        Esc              Quit (window close also quits).
+Movement input (works for every maze type):
+    Single arrow keys → cardinal direction (UP/DOWN/LEFT/RIGHT).
+    Held arrow chords → diagonal direction:
+        ↑ + →  → UPPER_RIGHT
+        ↑ + ←  → UPPER_LEFT
+        ↓ + →  → LOWER_RIGHT
+        ↓ + ←  → LOWER_LEFT
+    Left mouse click on an *adjacent linked* cell → move there.
 
-Why no Q-to-quit anymore: ``Q`` is now UPPER_LEFT in the sigma key map,
-and keeping it as a quit shortcut only on Orthogonal would mean the same
-key has different consequences in different modes. Esc + window-close is
-unambiguous either way.
+    The Rust ``make_move`` has built-in fallback for every direction
+    (e.g. UPPER_RIGHT tries UpperRight → Up → Right), so chords work
+    naturally on orthogonal too — pressing ↑+→ moves up if available,
+    else right. Same forgiving feel as the iOS app's eight-way controls.
+
+Sigma also keeps the legacy "hex roguelike" key layout for muscle memory:
+    W                UP             Q                UPPER_LEFT
+    X                DOWN           E                UPPER_RIGHT
+                                    Z                LOWER_LEFT
+                                    C                LOWER_RIGHT
+
+Common keys:
+    H                Toggle heatmap overlay
+    S                Toggle solution-path overlay
+    R                Regenerate with the current request (same params)
+    N                "New maze" — alias for R; reserved for a real picker
+                     dialog later. Behaves identically.
+    Esc              Quit (window close also quits).
+
+Open-exit dots: the active cell shows small white dots near each open
+edge — affordance equivalent to the iOS D-pad's per-direction enabled
+state. If a key seems "not to move you", check the dots.
 """
 
 from __future__ import annotations
@@ -41,9 +50,14 @@ import argparse
 
 import pygame
 
-from mazer.maze import Maze
+from mazer.maze import Cell, Maze
 from mazer.types import Algorithm, Coord, Direction, MazeRequest, MazeType
-from mazer.ui.renderer import OFF_WHITE, make_renderer
+from mazer.ui.renderer import (
+    OFF_WHITE,
+    make_renderer,
+    orthogonal_direction,
+    sigma_direction,
+)
 
 
 HUD_HEIGHT = 56
@@ -84,10 +98,62 @@ _KEYS_BY_TYPE: dict[MazeType, dict[int, Direction]] = {
     MazeType.SIGMA: SIGMA_KEYS,
 }
 
+ARROW_KEYS: tuple[int, ...] = (pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT)
+
 _HUD_HINT_BY_TYPE: dict[MazeType, str] = {
-    MazeType.ORTHOGONAL: "arrows: move",
-    MazeType.SIGMA: "W/X/Q/E/Z/C: move",
+    MazeType.ORTHOGONAL: "arrows + diag chords + click to move",
+    MazeType.SIGMA: "arrow chords / W·Q·E·Z·X·C / click to move",
 }
+
+
+def _resolve_chord(up: bool, down: bool, left: bool, right: bool) -> Direction | None:
+    """Resolve held arrow keys to a single Direction.
+
+    Diagonal combinations win over cardinals. Opposing pairs (UP+DOWN,
+    LEFT+RIGHT) cancel out — they're treated as if the perpendicular axis
+    isn't held, so e.g. UP+DOWN+RIGHT resolves to RIGHT.
+
+    Returns ``None`` if no arrow is held (callers shouldn't reach this
+    case on KEYDOWN — defensive only).
+    """
+    vertical = up ^ down  # cancel if both
+    horizontal = left ^ right
+    if vertical and horizontal:
+        if up and right:
+            return Direction.UPPER_RIGHT
+        if up and left:
+            return Direction.UPPER_LEFT
+        if down and right:
+            return Direction.LOWER_RIGHT
+        if down and left:
+            return Direction.LOWER_LEFT
+    if vertical:
+        return Direction.UP if up else Direction.DOWN
+    if horizontal:
+        return Direction.LEFT if left else Direction.RIGHT
+    return None
+
+
+def _direction_for_click(
+    active: Cell, target_coord: Coord, cells: list[Cell], maze_type: MazeType
+) -> Direction | None:
+    """Look up the direction that connects active → clicked, if linked.
+
+    Orthogonal: trivial 4-adjacent delta lookup.
+    Sigma: read the direction name from ``active.linked`` so we send the
+    *exact* name the FFI used, sidestepping the boundary-clamp ambiguity.
+    Returns ``None`` if the click was on a non-adjacent or non-linked cell.
+    """
+    if target_coord == active.coord:
+        return None
+    if maze_type == MazeType.ORTHOGONAL:
+        direction = orthogonal_direction(active.coord, target_coord)
+        if direction is None or direction not in active.linked:
+            return None
+        return direction
+    if maze_type == MazeType.SIGMA:
+        return sigma_direction(active, target_coord, cells)
+    return None
 
 HUD_BG = OFF_WHITE
 HUD_TITLE_COLOR = (40, 40, 40)
@@ -216,6 +282,11 @@ def main(argv: list[str] | None = None) -> None:
     renderer = make_renderer(request.maze_type, screen, cell_size, offset=(0, HUD_HEIGHT))
     show_heatmap = False
     show_solution = False
+    # Once a chord fires from a multi-arrow KEYDOWN, mark every held arrow
+    # as consumed so the *other* arrow's eventual KEYDOWN doesn't fire a
+    # second move (or, if the user has key-repeat enabled externally, so
+    # autorepeat doesn't spam the chord). Cleared on the matching KEYUP.
+    arrows_consumed: set[int] = set()
 
     try:
         running = True
@@ -233,8 +304,39 @@ def main(argv: list[str] | None = None) -> None:
                     elif event.key in (pygame.K_r, pygame.K_n):
                         maze.close()
                         maze = Maze(request)
+                        arrows_consumed.clear()
+                    elif event.key in ARROW_KEYS:
+                        if event.key in arrows_consumed:
+                            continue
+                        keys = pygame.key.get_pressed()
+                        direction = _resolve_chord(
+                            keys[pygame.K_UP],
+                            keys[pygame.K_DOWN],
+                            keys[pygame.K_LEFT],
+                            keys[pygame.K_RIGHT],
+                        )
+                        if direction is not None:
+                            maze.move(direction)
+                            held_arrows = [k for k in ARROW_KEYS if keys[k]]
+                            if len(held_arrows) > 1:
+                                arrows_consumed.update(held_arrows)
                     elif event.key in key_map:
                         maze.move(key_map[event.key])
+                elif event.type == pygame.KEYUP and event.key in ARROW_KEYS:
+                    arrows_consumed.discard(event.key)
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    cells_for_click = maze.cells()
+                    target = renderer.cell_at(event.pos, cells_for_click)
+                    if target is not None:
+                        active = next(
+                            (c for c in cells_for_click if c.is_active), None
+                        )
+                        if active is not None:
+                            direction = _direction_for_click(
+                                active, target, cells_for_click, request.maze_type
+                            )
+                            if direction is not None:
+                                maze.move(direction)
 
             cells = maze.cells()
             solved = _is_solved(cells)

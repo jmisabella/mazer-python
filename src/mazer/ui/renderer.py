@@ -54,6 +54,7 @@ GOAL_COLOR = (255, 59, 48)             # SwiftUI .red
 VISITED_COLOR = (255, 120, 180)        # CellColors.traversedPathColor
 SOLUTION_COLOR = (116, 180, 191)       # midpoint of vividBlue and gray (CellColors.solutionPathColor)
 ACTIVE_MARKER_COLOR = (250, 200, 0)    # warm yellow — distinct from start/goal/solution
+OPEN_EXIT_DOT_COLOR = (255, 255, 255)  # contrast against any cell background
 WALL_COLOR = (0, 0, 0)
 BORDER_COLOR = (0, 0, 0)
 LETTER_COLOR = (255, 255, 255)
@@ -129,6 +130,30 @@ def cell_color(
     return _default_cell_color(cell.coord.y, total_rows)
 
 
+# --- Orthogonal helpers ---------------------------------------------------
+
+# Cardinal direction → (dx, dy) in grid coords. Used by both the orthogonal
+# renderer's open-exit dots and the click-to-move direction lookup.
+ORTHO_OFFSETS: dict[Direction, tuple[int, int]] = {
+    Direction.UP: (0, -1),
+    Direction.DOWN: (0, 1),
+    Direction.LEFT: (-1, 0),
+    Direction.RIGHT: (1, 0),
+}
+
+
+def orthogonal_direction(active: Coord, target: Coord) -> Direction | None:
+    """Resolve the cardinal direction from ``active`` to an adjacent ``target``.
+
+    Returns ``None`` if the two coords aren't 4-adjacent.
+    """
+    delta = (target.x - active.x, target.y - active.y)
+    for direction, off in ORTHO_OFFSETS.items():
+        if off == delta:
+            return direction
+    return None
+
+
 # --- Orthogonal -----------------------------------------------------------
 
 
@@ -178,6 +203,20 @@ class OrthogonalRenderer:
             self.offset_x, self.offset_y, cols * self.cell_size, rows * self.cell_size
         )
 
+    def cell_at(self, pos: tuple[int, int], cells: list[Cell]) -> Coord | None:
+        """Pixel → grid coord. Returns ``None`` if the click missed the maze.
+
+        Bounds-checks against the painted maze rect rather than just floor-
+        dividing, so a click in the HUD (or to the right/below the maze)
+        doesn't resolve to a fictional cell off the grid.
+        """
+        rect = self.maze_rect(cells)
+        if not rect.collidepoint(pos):
+            return None
+        x = (pos[0] - self.offset_x) // self.cell_size
+        y = (pos[1] - self.offset_y) // self.cell_size
+        return Coord(int(x), int(y))
+
     def _cell_rect(self, x: int, y: int) -> pygame.Rect:
         return pygame.Rect(
             self.offset_x + x * self.cell_size,
@@ -226,6 +265,26 @@ class OrthogonalRenderer:
             radius = max(3, self.cell_size // 4)
             pygame.draw.circle(self.surface, ACTIVE_MARKER_COLOR, rect.center, radius)
             pygame.draw.circle(self.surface, WALL_COLOR, rect.center, radius, max(1, w // 2))
+            self._draw_open_exit_dots(rect, cell)
+
+    def _draw_open_exit_dots(self, rect: pygame.Rect, cell: Cell) -> None:
+        """Place a small white dot near each open edge of the active cell.
+
+        Affordance to surface which moves are valid right now — same intent
+        as the iOS D-pad's per-direction enabled state.
+        """
+        cx, cy = rect.center
+        # Dot sits ~3/8 of the way from the center to the edge in the open
+        # direction. Scaled to cell_size so it remains visible at small grids.
+        offset = self.cell_size * 3 // 8
+        dot_radius = max(2, self.cell_size // 12)
+        outline = max(1, dot_radius // 2)
+        for direction, (dx, dy) in ORTHO_OFFSETS.items():
+            if direction not in cell.linked:
+                continue
+            dot = (cx + dx * offset, cy + dy * offset)
+            pygame.draw.circle(self.surface, OPEN_EXIT_DOT_COLOR, dot, dot_radius)
+            pygame.draw.circle(self.surface, WALL_COLOR, dot, dot_radius, outline)
 
     def _draw_letter(self, rect: pygame.Rect, letter: str) -> None:
         text = self._marker_font.render(letter, True, LETTER_COLOR)
@@ -311,6 +370,63 @@ _PHYSICAL_HEX_EDGES_ODD: tuple[tuple[tuple[int, int], tuple[int, int]], ...] = (
 )
 
 
+def _point_in_polygon(point: tuple[float, float], polygon: list[tuple[float, float]]) -> bool:
+    """Standard ray-cast point-in-polygon. Used by sigma click hit-testing."""
+    x, y = point
+    inside = False
+    n = len(polygon)
+    j = n - 1
+    for i in range(n):
+        xi, yi = polygon[i]
+        xj, yj = polygon[j]
+        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
+def build_sigma_linked_pairs(
+    cells: list[Cell], by_coord: dict[Coord, Cell]
+) -> set[frozenset[Coord]]:
+    """Resolve direction-name links into geometric coord pairs.
+
+    For each direction in ``cell.linked``, walk the candidate offsets and
+    pick the first one that lands on an existing cell. This makes wall
+    drawing — and click-to-move direction lookup — tolerant of the Rust
+    library's clamp ambiguity at top-row even-col / bottom-row odd-col
+    boundaries (see ``hex_candidate_deltas`` for the full explanation).
+    """
+    height = max((c.coord.y for c in cells), default=0) + 1
+    pairs: set[frozenset[Coord]] = set()
+    for cell in cells:
+        for direction in cell.linked:
+            for dx, dy in hex_candidate_deltas(
+                direction, cell.coord.x, cell.coord.y, height
+            ):
+                target = Coord(cell.coord.x + dx, cell.coord.y + dy)
+                if target in by_coord:
+                    pairs.add(frozenset({cell.coord, target}))
+                    break
+    return pairs
+
+
+def sigma_direction(active: Cell, target: Coord, cells: list[Cell]) -> Direction | None:
+    """Find a direction name in ``active.linked`` that connects to ``target``.
+
+    Returns ``None`` if the target isn't actually linked from active. Reads
+    the direction name straight from ``active.linked`` rather than
+    reverse-mapping the coord delta — at boundary-clamp cells the FFI may
+    keep the *physically wrong* name in ``linked``, but it's the name the
+    Rust ``make_move`` will accept, so it's the one we have to send back.
+    """
+    height = max((c.coord.y for c in cells), default=0) + 1
+    for direction in active.linked:
+        for dx, dy in hex_candidate_deltas(direction, active.coord.x, active.coord.y, height):
+            if (active.coord.x + dx, active.coord.y + dy) == (target.x, target.y):
+                return direction
+    return None
+
+
 class SigmaRenderer:
     """Renders a sigma (flat-top hexagonal) maze onto a Pygame surface.
 
@@ -353,7 +469,7 @@ class SigmaRenderer:
         # avoids the boundary-clamp pitfall where the FFI's
         # ``set_open_walls`` reports a direction name whose standard
         # offset doesn't match the physical neighbor.
-        linked_pairs = self._build_linked_pairs(cells, by_coord)
+        linked_pairs = build_sigma_linked_pairs(cells, by_coord)
 
         bbox = self.maze_rect(cells)
         pygame.draw.rect(self.surface, OFF_WHITE, bbox)
@@ -365,37 +481,38 @@ class SigmaRenderer:
 
         pygame.draw.rect(self.surface, BORDER_COLOR, bbox, BORDER_WIDTH)
 
-    @staticmethod
-    def _build_linked_pairs(
-        cells: list[Cell], by_coord: dict[Coord, Cell]
-    ) -> set[frozenset[Coord]]:
-        """Resolve direction-name links into geometric coord pairs.
-
-        For each direction name in ``cell.linked``, walk the candidate
-        offsets and pick the first one that lands on an existing cell.
-        This is what makes wall drawing tolerant of the Rust clamp's
-        direction-name ambiguity at top-row even-col / bottom-row odd-col
-        boundaries.
-        """
-        height = max((c.coord.y for c in cells), default=0) + 1
-        pairs: set[frozenset[Coord]] = set()
-        for cell in cells:
-            for direction in cell.linked:
-                for dx, dy in hex_candidate_deltas(
-                    direction, cell.coord.x, cell.coord.y, height
-                ):
-                    target = Coord(cell.coord.x + dx, cell.coord.y + dy)
-                    if target in by_coord:
-                        pairs.add(frozenset({cell.coord, target}))
-                        break
-        return pairs
-
     def maze_rect(self, cells: list[Cell]) -> pygame.Rect:
         cols = max((c.coord.x for c in cells), default=0) + 1
         rows = max((c.coord.y for c in cells), default=0) + 1
         width = int(round(self.cell_size * (1.5 * cols + 0.5)))
         height = int(round(self.hex_height * (rows + 0.5)))
         return pygame.Rect(self.offset_x, self.offset_y, width, height)
+
+    def cell_at(self, pos: tuple[int, int], cells: list[Cell]) -> Coord | None:
+        """Pixel → grid coord. Returns ``None`` if the click missed all hexes.
+
+        Two-pass: pick the cell whose center is closest to the click (cheap
+        Manhattan-style scan over the small grids we ship with), then verify
+        the click is actually inside that hex's polygon. The verify pass
+        matters because closest-center on its own can resolve a click in a
+        sliver between hexes to the wrong neighbor.
+        """
+        if not self.maze_rect(cells).collidepoint(pos):
+            return None
+        px, py = pos
+        best: Coord | None = None
+        best_dist_sq = float("inf")
+        for cell in cells:
+            cx, cy = self._cell_center(cell.coord.x, cell.coord.y)
+            d = (cx - px) ** 2 + (cy - py) ** 2
+            if d < best_dist_sq:
+                best_dist_sq = d
+                best = cell.coord
+        if best is None:
+            return None
+        if not _point_in_polygon((px, py), self._cell_polygon(best.x, best.y)):
+            return None
+        return best
 
     def _vertex(self, q: int, r: int, vertex_index: int) -> tuple[float, float]:
         """Absolute (x, y) of the given vertex of cell (q, r).
@@ -472,6 +589,49 @@ class SigmaRenderer:
             radius = max(3, self.cell_size // 3)
             pygame.draw.circle(self.surface, ACTIVE_MARKER_COLOR, center_int, radius)
             pygame.draw.circle(self.surface, WALL_COLOR, center_int, radius, max(1, self.wall_width // 2))
+            self._draw_open_exit_dots(cell, center, polygon, by_coord, total_rows)
+
+    def _draw_open_exit_dots(
+        self,
+        cell: Cell,
+        center: tuple[float, float],
+        polygon: list[tuple[float, float]],
+        by_coord: dict[Coord, Cell],
+        height: int,
+    ) -> None:
+        """Place a dot near each open hex edge of the active cell.
+
+        Resolves each direction in ``cell.linked`` to its physical neighbor
+        coord (handling the boundary clamp via ``hex_candidate_deltas``) so
+        the dot always lands on the correct edge — not on the edge whose
+        name happens to be in ``linked`` after the FFI's clamp collision.
+        """
+        is_odd = (cell.coord.x & 1) == 1
+        edges = _PHYSICAL_HEX_EDGES_ODD if is_odd else _PHYSICAL_HEX_EDGES_EVEN
+        # Map physical neighbor delta → vertex pair, so once we know the
+        # target neighbor, we know which edge midpoint to mark.
+        edge_by_delta = {(dx, dy): (i, j) for (i, j), (dx, dy) in edges}
+        cx, cy = center
+        dot_radius = max(2, self.cell_size // 12)
+        outline = max(1, dot_radius // 2)
+        seen_edges: set[tuple[int, int]] = set()
+        for direction in cell.linked:
+            for dx, dy in hex_candidate_deltas(direction, cell.coord.x, cell.coord.y, height):
+                if Coord(cell.coord.x + dx, cell.coord.y + dy) in by_coord:
+                    edge = edge_by_delta.get((dx, dy))
+                    if edge is None or edge in seen_edges:
+                        break
+                    seen_edges.add(edge)
+                    i, j = edge
+                    mx = (polygon[i][0] + polygon[j][0]) / 2
+                    my = (polygon[i][1] + polygon[j][1]) / 2
+                    # Pull the dot ~60% of the way out from the center to
+                    # the edge midpoint — visible against the active marker
+                    # without crowding the wall.
+                    pos = (cx + 0.6 * (mx - cx), cy + 0.6 * (my - cy))
+                    pygame.draw.circle(self.surface, OPEN_EXIT_DOT_COLOR, pos, dot_radius)
+                    pygame.draw.circle(self.surface, WALL_COLOR, pos, dot_radius, outline)
+                    break
 
     def _draw_letter(self, center: tuple[int, int], letter: str) -> None:
         text = self._marker_font.render(letter, True, LETTER_COLOR)
@@ -509,11 +669,15 @@ Renderer = OrthogonalRenderer
 __all__ = [
     "HEATMAP_BELIZE_HOLE",
     "OFF_WHITE",
+    "ORTHO_OFFSETS",
     "OrthogonalRenderer",
     "Renderer",
     "SigmaRenderer",
+    "build_sigma_linked_pairs",
     "cell_color",
     "hex_candidate_deltas",
     "hex_offset_delta",
     "make_renderer",
+    "orthogonal_direction",
+    "sigma_direction",
 ]

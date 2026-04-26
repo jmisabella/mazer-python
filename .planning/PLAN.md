@@ -261,3 +261,40 @@ The renderer's hex-edge math came out clean (a literal port of `SigmaCellView`/`
     - End-to-end app smoke under the dummy SDL driver: `app.main(['--type', 'sigma'])` against a scripted event sequence (H, S, Q, E, Z, C, R, N, Esc) exits cleanly. Same for default orthogonal with arrow keys.
 
 Verified: 39 passed (was 35 + 0 skipped before this session). Sigma test reruns 30/30 across different RNG seeds. Full suite ~0.34s.
+
+## SESSION 8 [uncompleted]
+### Stage 7 — Better movement input for sigma (chord arrow keys + mouse/trackpad)
+
+Motivation from Session 7 user feedback: the Q/E/Z/C hex-roguelike layout is awkward for someone whose hands aren't already trained on it; in particular, `E` for UPPER_RIGHT didn't feel like a "move up-and-right" gesture. Two enhancements, both additive (don't break the existing key map):
+
+1. **Chord arrow keys for diagonals.**
+    - `↑` + `→` held together → UPPER_RIGHT.
+    - `↑` + `←` → UPPER_LEFT.
+    - `↓` + `→` → LOWER_RIGHT.
+    - `↓` + `←` → LOWER_LEFT.
+    - Single arrow keys keep their existing cardinal meaning.
+    - On orthogonal mazes, chords should be no-ops (Direction.LEFT/RIGHT cover the horizontal axis already), or could optionally fire the cardinal that the arrow combination "rounds toward" — design call to make in this session.
+
+    Implementation pattern that's worked in similar pygame games: don't dispatch on raw KEYDOWN for arrows. Instead, on each KEYDOWN of an arrow, sample `pygame.key.get_pressed()`; if a perpendicular arrow is also held at that instant, fire the diagonal immediately and set a "consumed until KEYUP" flag so the second arrow's eventual KEYDOWN/repeat doesn't double-fire. If only one arrow is held, fire the cardinal. This matches typical roguelike chord semantics with one frame of latency. Document the decision in the docstring; add a unit-style test for `_resolve_chord(keys_held)` returning the right `Direction` for each combination so the matrix is verifiable without booting the UI.
+
+2. **Mouse / trackpad click-to-move.**
+    - On left-click, hit-test the click position against the cell map. If the clicked cell is *adjacent* to the active cell (in the topology of the current maze type), find the direction that connects active → clicked and fire `maze.move(direction)`. If the clicked cell is non-adjacent or not linked, ignore the click (or, optionally, flash a brief "blocked" indicator on the active cell).
+    - Hit-testing for orthogonal: `(click_x // cell_size, click_y // cell_size)` after offset subtraction.
+    - Hit-testing for sigma: pick the hex whose center is closest to the click position and verify the click is inside that hex polygon (point-in-polygon test for the six vertices). A single closest-center pass is fine for the small grid sizes we're shipping; precision matters more than perf.
+    - Direction lookup uses the same coord-pair linkage set the renderer already builds (`SigmaRenderer._build_linked_pairs`) — promote it to a top-level helper so both renderer and click handler can call it. For orthogonal use the trivial `dx, dy → Direction` mapping.
+    - Optional polish: hover highlight on the cell under the cursor (subtle outline) so the click target is unambiguous; feasible from the renderer's existing per-cell drawing.
+
+    Don't try to support drag-to-trace yet — single click per move is the simplest gesture and matches the chord-arrow model.
+
+3. **Investigate why "E for UPPER_RIGHT didn't work" was reported.**
+    - The binding is correctly wired (`pygame.K_e: Direction.UPPER_RIGHT` in `SIGMA_KEYS`), and `move()` in the wrapper rejects un-linked moves with `False` rather than raising. Likeliest explanation: the cell the user was on at the time simply didn't have UPPER_RIGHT in its `linked` set — i.e. the move was rejected as a wall. The HUD should make available moves visible. **Action: add a small "open directions" indicator** (six tiny dots around the active-cell marker, lit for directions in `active.linked`) so the player can see at a glance which moves are valid. This is a Stage-4-equivalent affordance the iOS app gets implicitly via the on-screen D-pad button states.
+
+#### Tests
+- `tests/test_ui.py`: `_resolve_chord` matrix table-test. Optional: a hit-test test for sigma that constructs a small grid and asserts a click at the center of cell (q, r) resolves to that cell.
+- `tests/test_integration.py`: no changes — gameplay logic doesn't move.
+
+#### Acceptance
+- Holding `↑` + `→` on a sigma maze advances upper-right when that wall is open; ignores when it's closed.
+- Clicking on an adjacent linked cell moves the player there.
+- Existing Q/E/Z/C and arrow-only inputs still work (this session adds, doesn't replace).
+- The active cell shows which directions are currently open so "key didn't move me" is never ambiguous.

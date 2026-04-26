@@ -335,3 +335,122 @@ Verification:
 - Smoke-test under `SDL_VIDEODRIVER=dummy`: `app.main([])` (orthogonal) and `app.main(['--type', 'sigma'])` both run a scripted event sequence (chord arrow KEYDOWN/KEYUP pairs, single-button mouse clicks, sigma letter keys, H/S/R/N, Esc) and exit cleanly. **Caveat**: under the dummy driver, `pygame.key.get_pressed()` doesn't reflect posted events, so the smoke-test only covers no-exception behavior of the chord branch. The pure-function `test_resolve_chord_matrix` covers the resolver itself; their conjunction gives high confidence in the chord path. Real chord behavior still requires interactive verification by the user at a real keyboard.
 - Visual sanity-check PNGs (orthogonal 6×6 + sigma 5×5) confirm open-exit dots appear at the active cell's open edges in both maze types.
 - Sigma boundary-clamp behavior unchanged — `sigma_direction` and `build_sigma_linked_pairs` use the same `hex_candidate_deltas` path the renderer was already using, so the existing `test_solve_sigma_maze_by_following_solution_path` continues to pass.
+
+## SESSION 9 [uncompleted]
+### Stage 8 — Drag-to-move (continuous mouse/trackpad navigation)
+
+Currently click-to-move requires one click per cell. The iOS app lets the player slide a finger in any direction from anywhere on the grid and it moves through multiple cells continuously — a much smoother play experience. Replicate this with Pygame mouse events so both trackpad and regular mouse users get the same fluid feel.
+
+Design:
+- On `MOUSEBUTTONDOWN` (left button), record the starting cell and begin a drag session.
+- On `MOUSEMOTION` with the button held, compute the current hovered cell via `renderer.cell_at()`. Each time the hovered cell changes AND the new cell is linked to the current active cell, fire `maze.move(direction)` and update the "last moved-to cell" so the next motion event chains from there (not from the original drag-start). This gives continuous multi-cell movement in one gesture.
+- On `MOUSEBUTTONUP`, end the drag session.
+- Single-cell taps (press + release without crossing a cell boundary) should still work as before — the existing single-click behavior is the degenerate case of a zero-motion drag.
+- Keep the single-click path in `MOUSEBUTTONDOWN` as a fallback? Or unify: handle everything via drag (BUTTONDOWN starts, BUTTONUP ends, MOTION fires moves). Unified is cleaner — decide in session.
+
+Consider:
+- Threshold: optionally require the cursor to move ≥ N pixels before treating it as a drag (avoids accidental micro-drags on trackpads). A single-cell threshold (i.e. cursor must enter a *different* cell) is sufficient and requires no extra tuning knob.
+- Diagonal motion on orthogonal: if the cursor passes diagonally through a corner, the drag should pick the cardinal axis that matches the dominant motion direction (or just chain cell-to-cell via linked neighbors, which naturally handles it since orthogonal cells only link cardinally).
+- The Rust `make_move` fallback already handles diagonal directions on orthogonal, so if the drag momentarily fires UPPER_RIGHT the game stays consistent.
+
+Tests:
+- `tests/test_ui.py`: a drag simulation test — post MOUSEBUTTONDOWN, a sequence of MOUSEMOTION events crossing cell boundaries, then MOUSEBUTTONUP; assert `maze.move` was called the right number of times with the right directions. Run under dummy SDL.
+
+Acceptance:
+- Click-and-hold anywhere, slide across the maze, player advances cell-by-cell following the cursor through open walls.
+- Releasing the mouse ends movement.
+- Single tap still moves one cell (unchanged from Session 8).
+
+## SESSION 10 [uncompleted]
+### Stage 9 — Gradient cell backgrounds (replace flat default color)
+
+Currently when the heatmap overlay is off, every unvisited cell uses the same muted row-gradient that was ported from the iOS baseline. The iOS app displays beautiful random color gradients across the grid — much more visually engaging. Replicate that here.
+
+Design:
+- Study how the iOS app generates its gradients (check `MazeCellAppearance.swift`, `HeatMapPalette.swift`, `CellColors` — likely a per-generation random palette or a two-color lerp across the grid).
+- Generate a gradient at maze-creation time (not per-frame) so it doesn't flicker on each draw call. Store it either as a per-cell color dict (keyed by `Coord`) or as two chosen colors plus an interpolation function parameterized by position.
+- The gradient should be replaced (re-randomized) on `R`/`N` regeneration.
+- The gradient is the *default* cell background; the existing priority chain (start > goal > visited > solution > heatmap > default) is unchanged — only the last layer changes.
+- Heatmap toggle should still fully replace the gradient (heatmap wins when enabled), so the gradient is only visible in "plain" mode.
+
+Implementation notes:
+- A simple two-color random lerp across the grid (e.g. lerp by `(x + y) / (width + height)` or radially from a corner) is readable and performant. A more complex multi-stop gradient (matching iOS more closely) can be layered on top.
+- Per-cell colors computed once and passed into the renderer's `draw()` call via an optional `gradient: dict[Coord, Color] | None` parameter, or baked into a renderer-level `set_gradient(colors)` call.
+
+Tests:
+- No new test file needed; extend `test_ui.py` with a check that rendering with the gradient produces different cell colors than the plain off-white baseline.
+
+Acceptance:
+- `python -m mazer` launches with a randomly-colored gradient background.
+- `R` / `N` produces a new gradient.
+- `H` (heatmap on) replaces the gradient; `H` again (off) restores it.
+
+## SESSION 11 [uncompleted]
+### Stage 10 — In-game main menu (maze type + algorithm picker)
+
+Currently maze type and algorithm are CLI-only (`--type`, `--algo`). Add an in-game main menu so players can change both without restarting the process.
+
+Design:
+- `M` key (or dedicated menu button) opens a modal overlay rendered directly into the Pygame window — no OS dialog, no external library.
+- The menu shows: maze type selector (radio-style), algorithm selector (radio-style or scrollable list), grid size inputs (width × height), and a "Generate" button.
+- Navigation: arrow keys or mouse click to move between options, Enter/click to confirm, Esc to cancel without changing anything.
+- On "Generate": close the menu, apply the new `MazeRequest`, close the current `Maze`, open a new one. If the type+algorithm combination is unsupported (Rust returns NULL), show an inline error message in the menu ("That algorithm isn't compatible with this maze type — pick another") rather than crashing.
+- The menu should gracefully cap width/height inputs to reasonable bounds (e.g. 2–40) and show current values as defaults.
+
+Implementation notes:
+- A minimal widget toolkit (text label, selected-item highlight, text cursor for number input) implemented in ~100–150 lines of Pygame drawing is sufficient. No need for a full UI framework.
+- The algorithm compatibility table isn't encoded in Python yet — the menu can optimistically allow any combo and surface the error post-generation (the Rust already validates and returns NULL).
+- Renderer and app key-handling should pause during the menu (don't process H/S/R/N while the modal is open).
+
+Tests:
+- `tests/test_ui.py`: open the menu via synthetic KEYDOWN(M), navigate with arrows, confirm ESC closes without changing state, confirm a selection fires the expected new MazeRequest.
+
+Acceptance:
+- `M` opens the menu mid-game.
+- Player can change type, algorithm, and size, then generate without restarting.
+- Esc cancels and returns to the current maze unchanged.
+- Incompatible type+algorithm combos show an in-menu error rather than crashing.
+
+## SESSION 12 [uncompleted]
+### Stage 11 — Delta (triangular) grid rendering and play
+
+Add full support for the Delta maze type: rendering, key mapping, hit-testing, and integration test.
+
+Scope:
+1. **`DeltaRenderer` in `ui/renderer.py`**: triangular cells in alternating up/down orientation. Each row contains `width` triangles; even-indexed cells (x even) point up, odd-indexed point down (or vice versa — confirm against `DeltaCellView.swift`). Vertices computed from `(x, y)` and cell width/height. Wall edges are the three sides of each triangle. Direction → edge mapping ported from `HexDirection`/`DeltaDirection` in the iOS reference.
+2. **`make_renderer` factory** extended to handle `MazeType.DELTA`; remove its `NotImplementedError` for that type.
+3. **App-level integration**: add `--type delta` CLI option. Key map for delta's six directions — ported from the iOS eight-way D-pad's delta subset. HUD hint updated.
+4. **`cell_at` for delta**: pixel → triangle. The alternating orientation means alternating triangles share edge X-coordinates; use the barycentric or cross-product point-in-triangle test.
+5. **Tests**: `test_integration.py` — `test_solve_delta_maze_by_following_solution_path`. `test_ui.py` — `test_delta_renderer_draws_without_error`, `test_delta_cell_at_resolves_clicks`.
+
+Reference: `DeltaCellView.swift`, `DeltaMazeView.swift` in the iOS reference.
+
+Note: Delta uses six directions (`Up`, `UpperLeft`, `UpperRight`, `Down`, `LowerLeft`, `LowerRight`) — same as Sigma, so the eight-way control and the chord resolver already cover it. The complexity is purely in the cell geometry and hit-testing.
+
+## SESSION 13 [uncompleted]
+### Stage 12 — Rhombic grid rendering and play
+
+Add full support for the Rhombic maze type: rendering, key mapping, hit-testing, and integration test.
+
+Scope:
+1. **`RhombicRenderer` in `ui/renderer.py`**: 45°-rotated diamond (rhombus) cells. The iOS reference uses a custom direction remap visible in `Cell::get_user_facing_open_walls` — study `RhombicCellView.swift` and `RhombicMazeView.swift` to get the exact vertex layout and direction-to-edge mapping. Rhombic uses only four diagonal directions (`UpperRight`, `LowerRight`, `LowerLeft`, `UpperLeft`), not cardinals.
+2. **`make_renderer`** extended for `MazeType.RHOMBIC`.
+3. **App-level integration**: `--type rhombic`. Rhombic uses `FourWayDiagonalControlView` on iOS (four diagonal-only buttons) — key map is diagonal arrows only (or diagonal letter keys). No cardinal movement. HUD hint updated.
+4. **`cell_at` for rhombic**: point-in-diamond using the same ray-cast or axis-aligned bounding-box + in-polygon approach used for sigma.
+5. **Tests**: solver integration test + renderer smoke test + `cell_at` test.
+
+Reference: `RhombicCellView.swift`, `RhombicMazeView.swift`. Pay attention to `Cell::get_user_facing_open_walls` in the Rust (`grid.rs`) — it applies a remap for Rhombic.
+
+## SESSION 14 [uncompleted]
+### Stage 13 — Upsilon (octagon + square) grid rendering and play
+
+Add full support for the Upsilon maze type: rendering, key mapping, hit-testing, and integration test.
+
+Scope:
+1. **`UpsilonRenderer` in `ui/renderer.py`**: alternating octagon and square cells. The layout mixes two cell shapes per grid position — study `UpsilonCellView.swift` and `UpsilonMazeView.swift` for vertex math and the `is_square` / `orientation` fields (already present on Python's `Cell` dataclass from Stage 3). Upsilon uses eight directions.
+2. **`make_renderer`** extended for `MazeType.UPSILON`.
+3. **App-level integration**: `--type upsilon`. Eight-way key map identical to sigma's. HUD hint updated.
+4. **`cell_at` for upsilon**: hit-test must handle two cell shapes (octagon polygon test for octagon cells, AABB or smaller polygon for square cells). Distinguish by `cell.is_square`.
+5. **Tests**: solver integration test + renderer smoke test + `cell_at` test covering both cell shapes.
+
+Reference: `UpsilonCellView.swift`, `UpsilonMazeView.swift`, `UpsilonMazeView.swift`. Note `is_square` and `orientation` on the `Cell` dataclass — they were added in Stage 3 for exactly this purpose.

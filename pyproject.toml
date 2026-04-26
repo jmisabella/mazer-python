@@ -18,6 +18,12 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
+    # cffi's compile step shells out to distutils via a shim, and distutils
+    # was removed from the Python stdlib in 3.12. The shim falls back to
+    # setuptools' Extension class, so setuptools is required at build time
+    # (running `python -m mazer._ffi_build`) on Python 3.12+. It's a dev/
+    # build dep, not a runtime dep — the resulting .so doesn't need it.
+    "setuptools>=68",
 ]
 
 [tool.hatch.build.targets.wheel]

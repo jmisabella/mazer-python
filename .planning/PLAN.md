@@ -66,7 +66,7 @@ Bugs found and fixed during implementation (worth noting because they're easy to
 
 Verified end-to-end on macOS arm64: clone → patch → cargo build → stage produced `native/libmazer.dylib` (Mach-O 64-bit arm64, ~708KB) and `native/mazer.h`. Idempotent re-run hits cargo's incremental cache and finishes in <100ms.
 
-## SESSION 3 [uncompleted]
+## SESSION 3 [completed 2026-04-25]
 ### Stage 2 — cffi binding
 Implement `src/mazer/_ffi.py` using cffi in API-out-of-line mode. Use a hand-written `cdef` string (do not slurp the header — it has duplicate declarations that will break cffi). The cdef should declare exactly:
 
@@ -84,6 +84,29 @@ In tests/test_ffi.py, write tests that:
 5. Generate a maze with `capture_steps: true`, assert `mazer_get_generation_steps_count > 0`, fetch step 0's cells, free them.
 
 These tests should be ugly, low-level, and exhaustive — they're the FFI safety net.
+
+#### Session 3 notes
+
+Decisions / minor deviations from the plan:
+
+- **Build wiring split into two scripts.** Renamed Stage-1's `build.sh` → `build_rust.sh` (Rust-only). New top-level `build.sh` orchestrates: runs `build_rust.sh` then `python -m mazer._ffi_build`. Forwards args to the Rust step (so `./build.sh --debug` works). Documented order explicitly in README so the build steps and their dependencies are unambiguous.
+- **cffi extension lives inside the package**, not at top level. Plan said `from _mazer_cffi import ffi, lib`; we ship as `mazer._mazer_cffi` and `_ffi.py` does `from mazer._mazer_cffi import ffi, lib`. Reason: keeps the compiled binary discoverable as `python -c "from mazer._ffi import lib"` without PYTHONPATH games, and makes the eventual wheel layout obvious. The `.so` is binary/per-platform/per-Python so it's gitignored (added explicit `/src/mazer/_mazer_cffi*` rule on top of the generic `*.so`).
+- **cdef is hand-written**, not slurped from `mazer.h`. Plan-mandated; verified the upstream header has duplicate prototypes for `mazer_get_generation_steps_count` and `mazer_get_generation_step_cells` (cdef rejects duplicates) so this wasn't optional. `int mazer_ffi_integration_test();` in the header is K&R-style "unspecified args"; declared as `(void)` in cdef to be unambiguous.
+- **API out-of-line mode** (per plan). Compile produces `src/mazer/_mazer_cffi.cpython-<ver>-<platform>.so`. Intermediate C lands under `build/cffi/` (gitignored under the generic `build/`); only the final `.so` is copied into `src/mazer/`.
+- **setuptools added to dev deps.** Python 3.12+ removed stdlib `distutils`; cffi's compile shim falls back to setuptools' `Extension`. Without it, `_ffi_build.py` raises `ModuleNotFoundError: No module named 'setuptools'`. Pinned `setuptools>=68` under `[project.optional-dependencies] dev`.
+- **rpath strategy.** `_ffi_build.py` sets `extra_link_args = ["-Wl,-rpath,@loader_path/../../native"]` on macOS, `$ORIGIN/...` on Linux. From `src/mazer/_mazer_cffi*.so`, that resolves to `<repo>/native/` where the staged dylib lives. Wheel distribution (where `native/` won't be alongside) is out of scope for Stage 2.
+
+Bug found and fixed during implementation (would have been a latent crash for any other dev or after `cargo clean`):
+
+- **macOS dylib install_name was the absolute cargo build path.** Cargo's default `LC_ID_DYLIB` for a `cdylib` is `/<repo>/mazer/target/release/deps/libmazer.dylib`. The linker propagates that into the consumer's `LC_LOAD_DYLIB` verbatim, which made the rpath I'd baked into the `.so` *unused* — dyld resolved the absolute path directly. Tests passed locally but the `.so` was non-relocatable: hiding `mazer/target/` (or moving the repo) reproduces `Library not loaded: ... no such file`.
+  
+  Fix in two places:
+  1. `build_rust.sh` runs `install_name_tool -id @rpath/libmazer.dylib native/libmazer.dylib` after staging, so any future link gets `@rpath/libmazer.dylib` baked in.
+  2. `_ffi_build.py` runs `install_name_tool -change <abs> @rpath/libmazer.dylib` on the just-copied `.so` as a postprocess, so a stale `.so` linked against the abs path also gets fixed without forcing a `cffi` cache invalidation.
+  
+  Verified: `otool -L src/mazer/_mazer_cffi*.so` now shows `@rpath/libmazer.dylib`, and tests pass with `mazer/target/` moved out of the way. Linux doesn't need this — ELF's `DT_NEEDED` is a soname, not a path, and the runpath alone is sufficient.
+
+Test invocation note: tests run via `.venv/bin/pytest` (or `pytest` with the venv activated). All 5 FFI tests pass; the Stage 3/5 placeholders remain `@pytest.mark.skip`d.
 
 ## SESSION 4 [uncompleted]
 ### Stage 3 — Pythonic wrapper

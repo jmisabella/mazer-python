@@ -129,10 +129,8 @@ _HUD_HINT_BY_TYPE: dict[MazeType, str] = {
 
 
 # Adjacent directions (±45° on the 8-direction wheel) to try when the
-# primary direction is walled off.  Gives wall-sliding / auto-steering:
-# rather than stopping dead, the player flows around corners toward the
-# nearest open passage.  The Rust make_move fallback then applies its own
-# per-type sub-fallback inside each attempt.
+# primary direction is walled off (orthogonal and sigma).  Delta uses a
+# separate orientation-aware vertical slide — see _move_with_slide.
 _SLIDE_ALTS: dict[Direction, tuple[Direction, Direction]] = {
     Direction.UP:          (Direction.UPPER_LEFT,  Direction.UPPER_RIGHT),
     Direction.UPPER_RIGHT: (Direction.UP,          Direction.RIGHT),
@@ -144,14 +142,39 @@ _SLIDE_ALTS: dict[Direction, tuple[Direction, Direction]] = {
     Direction.UPPER_LEFT:  (Direction.LEFT,        Direction.UP),
 }
 
+# Directions that represent horizontal movement in a delta maze (produced
+# by _delta_horizontal converting a LEFT/RIGHT arrow to the orientation-
+# correct diagonal).
+_DELTA_HORIZONTAL_DIRS = frozenset({
+    Direction.UPPER_LEFT, Direction.UPPER_RIGHT,
+    Direction.LOWER_LEFT, Direction.LOWER_RIGHT,
+})
 
-def _move_with_slide(maze, direction: Direction) -> bool:
-    """Fire *direction*; if blocked, try the two nearest slide alternatives.
 
-    Returns True if any attempt moved the player.
+def _move_with_slide(maze, direction: Direction, maze_type: MazeType) -> bool:
+    """Fire *direction*; if blocked, try a slide alternative.
+
+    Delta horizontal slide is orientation-aware: when UPPER/LOWER_RIGHT/LEFT
+    is blocked, slide to the one vertical neighbor that genuinely exists for
+    the active cell's orientation — Normal cells connect downward only,
+    Inverted cells connect upward only.  Using the wrong vertical would hit
+    the Rust's diagonal fallback and land on the *opposite* horizontal
+    neighbour (the cell just left), causing back-and-forth oscillation.
+
+    All other maze types use the ±45° direction-wheel table (_SLIDE_ALTS).
     """
     if maze.move(direction):
         return True
+    if maze_type == MazeType.DELTA and direction in _DELTA_HORIZONTAL_DIRS:
+        cells = maze.cells()
+        active = next((c for c in cells if c.is_active), None)
+        if active is not None:
+            vertical = (
+                Direction.DOWN if active.orientation.lower() == "normal"
+                else Direction.UP
+            )
+            return maze.move(vertical)
+        return False
     for alt in _SLIDE_ALTS.get(direction, ()):
         if maze.move(alt):
             return True
@@ -605,12 +628,12 @@ def main(argv: list[str] | None = None) -> None:
                                 and direction in (Direction.LEFT, Direction.RIGHT)
                             ):
                                 direction = _delta_horizontal(direction, maze.cells())
-                            _move_with_slide(maze, direction)
+                            _move_with_slide(maze, direction, request.maze_type)
                             held_arrows = [k for k in ARROW_KEYS if keys[k]]
                             if len(held_arrows) > 1:
                                 arrows_consumed.update(held_arrows)
                     elif event.key in key_map:
-                        _move_with_slide(maze, key_map[event.key])
+                        _move_with_slide(maze, key_map[event.key], request.maze_type)
                 elif event.type == pygame.KEYUP:
                     keys_held.discard(event.key)
                     if event.key in ARROW_KEYS:

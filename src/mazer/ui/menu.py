@@ -83,6 +83,7 @@ class MenuLayout:
     left_arrows: dict[int, pygame.Rect]
     right_arrows: dict[int, pygame.Rect]
     generate_btn: pygame.Rect
+    panel: pygame.Rect  # bounding rect of the whole panel; clicks outside cancel
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +119,7 @@ class MenuState:
 
     def handle_keydown(self, key: int) -> tuple[bool, MazeRequest | None]:
         """Handle a KEYDOWN event. Returns ``(menu_open, request_or_None)``."""
-        if key == pygame.K_ESCAPE:
+        if key in (pygame.K_ESCAPE, pygame.K_m):
             return False, None
         if key == pygame.K_UP:
             self.section = (self.section - 1) % self.NUM_SECTIONS
@@ -143,7 +144,12 @@ class MenuState:
     def handle_click(
         self, pos: tuple[int, int], layout: MenuLayout
     ) -> tuple[bool, MazeRequest | None]:
-        """Handle a left-click. Returns the same tuple shape as ``handle_keydown``."""
+        """Handle a left-click. Returns the same tuple shape as ``handle_keydown``.
+
+        Clicks outside the panel cancel the menu (same as Esc / M).
+        """
+        if not layout.panel.collidepoint(pos):
+            return False, None
         for section, rect in layout.left_arrows.items():
             if rect.collidepoint(pos):
                 self.section = section
@@ -212,7 +218,7 @@ def draw_menu(
     font: pygame.font.Font,
 ) -> MenuLayout:
     """Draw the menu modal onto *surface*. Returns a ``MenuLayout`` for click handling."""
-    layout = MenuLayout(rows={}, left_arrows={}, right_arrows={}, generate_btn=pygame.Rect(0, 0, 0, 0))
+    layout = MenuLayout(rows={}, left_arrows={}, right_arrows={}, generate_btn=pygame.Rect(0, 0, 0, 0), panel=pygame.Rect(0, 0, 0, 0))
 
     # Dim the background.
     dim = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
@@ -225,6 +231,7 @@ def draw_menu(
 
     # Panel background.
     panel = pygame.Rect(px, py, _MENU_W, _MENU_H)
+    layout.panel = panel
     pygame.draw.rect(surface, _PANEL_BG, panel, border_radius=12)
     pygame.draw.rect(surface, _PANEL_BORDER, panel, width=2, border_radius=12)
 

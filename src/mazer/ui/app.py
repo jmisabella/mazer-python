@@ -136,6 +136,23 @@ def _resolve_chord(up: bool, down: bool, left: bool, right: bool) -> Direction |
     return None
 
 
+# Orthogonal: eight 45° sectors.  Angle 0° = rightward (+x), clockwise
+# (y-down screen coords).  Each sector boundary is at multiples of 45°
+# offset by 22.5° so the cardinal and diagonal centres are equidistant.
+# Diagonals are passed straight to the Rust ``make_move`` which tries the
+# vertical component first, then the horizontal — e.g. UPPER_RIGHT tries
+# Up → Right — giving the liberal fallback the user feels on the trackpad.
+_ORTHO_SECTOR_DIRECTIONS = (
+    Direction.RIGHT,        # sector 0: 337.5°–22.5°
+    Direction.LOWER_RIGHT,  # sector 1: 22.5°–67.5°
+    Direction.DOWN,         # sector 2: 67.5°–112.5°
+    Direction.LOWER_LEFT,   # sector 3: 112.5°–157.5°
+    Direction.LEFT,         # sector 4: 157.5°–202.5°
+    Direction.UPPER_LEFT,   # sector 5: 202.5°–247.5°
+    Direction.UP,           # sector 6: 247.5°–292.5°
+    Direction.UPPER_RIGHT,  # sector 7: 292.5°–337.5°
+)
+
 # Sigma: six 60° sectors mapped to hex directions, indexed by
 # ``int((angle_degrees + 30) % 360 / 60)``.  Angle 0° = rightward (screen
 # x+), increasing clockwise (y-down screen coords).  Centers per sector:
@@ -144,28 +161,29 @@ def _resolve_chord(up: bool, down: bool, left: bool, right: bool) -> Direction |
 _SIGMA_SECTOR_DIRECTIONS = (
     Direction.UPPER_RIGHT,  # sector 0: 300°–360° / 0°–30°
     Direction.LOWER_RIGHT,  # sector 1: 30°–90°
-    Direction.DOWN,          # sector 2: 90°–150°
+    Direction.DOWN,         # sector 2: 90°–150°
     Direction.LOWER_LEFT,   # sector 3: 150°–210°
     Direction.UPPER_LEFT,   # sector 4: 210°–270°
-    Direction.UP,            # sector 5: 270°–330°
+    Direction.UP,           # sector 5: 270°–330°
 )
 
 
 def _direction_from_vector(dx: float, dy: float, maze_type: MazeType) -> Direction | None:
     """Resolve a drag vector to a Direction based on maze type.
 
-    Orthogonal: dominant-axis (4-way).
-    Sigma: angle mapped to the nearest of 6 hex directions.
+    Orthogonal: angle mapped to the nearest of 8 directions (45° sectors).
+      Diagonal directions are passed to the Rust which tries the vertical
+      component first, then horizontal — smooth trackpad fallback.
+    Sigma: angle mapped to the nearest of 6 hex directions (60° sectors).
     Returns None for zero-length vectors or unimplemented maze types.
     """
     if dx == 0 and dy == 0:
         return None
+    angle = (math.degrees(math.atan2(dy, dx)) + 360) % 360
     if maze_type == MazeType.ORTHOGONAL:
-        if abs(dx) >= abs(dy):
-            return Direction.RIGHT if dx > 0 else Direction.LEFT
-        return Direction.DOWN if dy > 0 else Direction.UP
+        sector = int((angle + 22.5) / 45) % 8
+        return _ORTHO_SECTOR_DIRECTIONS[sector]
     if maze_type == MazeType.SIGMA:
-        angle = (math.degrees(math.atan2(dy, dx)) + 360) % 360
         sector = int((angle + 30) % 360 / 60)
         return _SIGMA_SECTOR_DIRECTIONS[sector]
     return None
@@ -408,6 +426,7 @@ def main(argv: list[str] | None = None) -> None:
                                     menu_state.set_generation_error()
                                     open_ = True
                             if not open_:
+                                pygame.key.set_repeat(0)
                                 menu_state = None
                                 menu_layout = None
                     elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -433,6 +452,7 @@ def main(argv: list[str] | None = None) -> None:
                                         menu_state.set_generation_error()
                                         open_ = True
                                 if not open_:
+                                    pygame.key.set_repeat(0)
                                     menu_state = None
                                     menu_layout = None
 
@@ -443,6 +463,7 @@ def main(argv: list[str] | None = None) -> None:
                     elif event.key == pygame.K_m:
                         menu_state = MenuState(request)
                         menu_layout = None
+                        pygame.key.set_repeat(300, 60)
                     elif event.key == pygame.K_h:
                         show_heatmap = not show_heatmap
                     elif event.key == pygame.K_s:
@@ -474,7 +495,15 @@ def main(argv: list[str] | None = None) -> None:
                 elif event.type == pygame.KEYUP and event.key in ARROW_KEYS:
                     arrows_consumed.discard(event.key)
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    drag.begin(event.pos)
+                    if solved:
+                        maze.close()
+                        maze = Maze(request)
+                        gradient = generate_gradient(gradient.base)
+                        renderer.set_gradient(gradient)
+                        arrows_consumed.clear()
+                        drag.end()
+                    else:
+                        drag.begin(event.pos)
                 elif event.type == pygame.MOUSEMOTION:
                     drag.motion(event.pos, maze, cell_size, request.maze_type)
                 elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:

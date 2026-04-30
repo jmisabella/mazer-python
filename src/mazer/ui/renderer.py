@@ -4,7 +4,7 @@ Look-and-feel mirrors the iOS reference app
 (``.planning/referenced_resources/iOS_app/mazer-ios/Views/MazeComponents/``
 and ``Layout/MazeCellAppearance.swift``):
 
-* Wall stroke for orthogonal = ``cell_size // 6``; for sigma it's
+* Wall stroke for orthogonal = ``cell_size // 12``; for sigma it's
   ``cell_size // 6`` at ``cell_size >= 18`` and ``cell_size // 7`` below
   (denominator from ``wallStrokeWidth(for:cellSize:)``).
 * Heatmap default is the "Belize Hole" 10-shade gradient from
@@ -251,7 +251,7 @@ class OrthogonalRenderer:
         self.cell_size = cell_size
         self.offset_x, self.offset_y = offset
         self.palette = palette
-        self.wall_width = max(1, cell_size // 6)
+        self.wall_width = max(1, cell_size // 12)
         self._marker_font = pygame.font.SysFont(None, max(14, int(cell_size * 0.9)))
         self.gradient: GradientTheme | None = None
 
@@ -336,11 +336,6 @@ class OrthogonalRenderer:
                 self.surface, WALL_COLOR,
                 pygame.Rect(rect.right - w, rect.top, w, rect.height),
             )
-
-        if cell.is_start:
-            self._draw_letter(rect, "A")
-        elif cell.is_goal:
-            self._draw_letter(rect, "B")
 
         if cell.is_active:
             radius = max(3, self.cell_size // 4)
@@ -665,11 +660,6 @@ class SigmaRenderer:
 
         center = self._cell_center(q, r)
         center_int = (int(round(center[0])), int(round(center[1])))
-
-        if cell.is_start:
-            self._draw_letter(center_int, "A")
-        elif cell.is_goal:
-            self._draw_letter(center_int, "B")
 
         if cell.is_active:
             radius = max(3, self.cell_size // 3)

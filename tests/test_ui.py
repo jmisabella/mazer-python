@@ -223,16 +223,19 @@ def test_orthogonal_direction_lookup() -> None:
 # --- Drag direction resolver ------------------------------------------------
 
 @pytest.mark.parametrize("dx,dy,expected", [
+    # Pure cardinals.
     (20, 0, "Right"),
     (-20, 0, "Left"),
     (0, -20, "Up"),
     (0, 20, "Down"),
-    (15, -15, "Right"),   # 45° up-right → dominant axis is equal → Right wins (|dx|>=|dy|)
-    (15, 15, "Right"),    # 45° down-right
-    (-15, -15, "Left"),
-    (-15, 15, "Left"),
-    (5, -20, "Up"),       # mostly up
-    (5, 20, "Down"),      # mostly down
+    # 45° diagonals → diagonal directions (Rust tries vertical first, then horizontal).
+    (15, -15, "UpperRight"),
+    (15, 15, "LowerRight"),
+    (-15, -15, "UpperLeft"),
+    (-15, 15, "LowerLeft"),
+    # Off-diagonal: mostly vertical → cardinal.
+    (5, -20, "Up"),
+    (5, 20, "Down"),
 ])
 def test_direction_from_vector_orthogonal(dx, dy, expected) -> None:
     from mazer.ui.app import _direction_from_vector
@@ -706,6 +709,48 @@ def test_menu_click_left_arrow_changes_value() -> None:
     open_, req = state.handle_click((la.centerx, la.centery), layout)
     assert open_ is True
     assert state.width == orig_w - 1
+
+
+def test_menu_m_key_cancels_menu() -> None:
+    """Pressing M while the menu is open closes it without applying changes."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    state = MenuState(request)
+    # Change something so we can verify it isn't applied.
+    state.section = MenuState.SECTION_WIDTH
+    state.handle_keydown(pygame.K_RIGHT)
+    assert state.width == 6
+
+    open_, req = state.handle_keydown(pygame.K_m)
+    assert open_ is False
+    assert req is None  # cancelled, not generated
+
+
+def test_menu_click_outside_panel_cancels_menu() -> None:
+    """A click outside the panel rect closes the menu without applying changes."""
+    from mazer.ui.menu import MenuState, draw_menu
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    surface = pygame.Surface((600, 500))
+    font = pygame.font.SysFont(None, 22)
+    state = MenuState(request)
+    layout = draw_menu(surface, state, font)
+
+    # Click in the top-left corner, well outside the centred panel.
+    open_, req = state.handle_click((5, 5), layout)
+    assert open_ is False
+    assert req is None
 
 
 def test_menu_click_generate_button_returns_request() -> None:

@@ -410,6 +410,44 @@ def main(argv: list[str] | None = None) -> None:
     menu_state: MenuState | None = None
     menu_layout: MenuLayout | None = None
 
+    def _commit_menu_result(
+        open_: bool,
+        new_request,
+    ) -> tuple[bool, object, object, int, pygame.Surface]:
+        """Apply a menu result to the running game state.
+
+        Returns ``(menu_still_open, maze, renderer, cell_size, screen)``.
+        Non-local bindings (maze, renderer, etc.) are captured by reference
+        from the enclosing ``main`` scope via the ``nonlocal`` statement in
+        callers.
+        """
+        nonlocal maze, renderer, cell_size, screen, request, key_map, gradient
+        nonlocal menu_state, menu_layout
+        if not open_:
+            if new_request is not None:
+                try:
+                    maze, renderer, cell_size, screen = _apply_new_request(
+                        new_request, maze, screen
+                    )
+                    request = new_request
+                    key_map = _KEYS_BY_TYPE.get(request.maze_type, ORTHOGONAL_KEYS)
+                    gradient = generate_gradient()
+                    renderer.set_gradient(gradient)
+                    arrows_consumed.clear()
+                    drag.end()
+                    pygame.display.set_caption(
+                        f"Mazer — {request.maze_type.value} · "
+                        f"{request.algorithm.value} {request.width}×{request.height}"
+                    )
+                except MazeGenerationError:
+                    menu_state.set_generation_error()
+                    open_ = True
+            if not open_:
+                pygame.key.set_repeat(0)
+                menu_state = None
+                menu_layout = None
+        return open_
+
     try:
         running = True
         while running:
@@ -421,55 +459,18 @@ def main(argv: list[str] | None = None) -> None:
                 elif menu_state is not None:
                     if event.type == pygame.KEYDOWN:
                         open_, new_request = menu_state.handle_keydown(event.key)
-                        if not open_:
-                            if new_request is not None:
-                                try:
-                                    maze, renderer, cell_size, screen = _apply_new_request(
-                                        new_request, maze, screen
-                                    )
-                                    request = new_request
-                                    key_map = _KEYS_BY_TYPE.get(request.maze_type, ORTHOGONAL_KEYS)
-                                    gradient = generate_gradient()
-                                    renderer.set_gradient(gradient)
-                                    arrows_consumed.clear()
-                                    drag.end()
-                                    pygame.display.set_caption(
-                                        f"Mazer — {request.maze_type.value} · "
-                                        f"{request.algorithm.value} {request.width}×{request.height}"
-                                    )
-                                except MazeGenerationError:
-                                    menu_state.set_generation_error()
-                                    open_ = True
-                            if not open_:
-                                pygame.key.set_repeat(0)
-                                menu_state = None
-                                menu_layout = None
+                        _commit_menu_result(open_, new_request)
+                    elif event.type == pygame.KEYUP:
+                        open_, new_request = menu_state.handle_keyup(event.key)
+                        _commit_menu_result(open_, new_request)
                     elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                         if menu_layout is not None:
-                            open_, new_request = menu_state.handle_click(event.pos, menu_layout)
-                            if not open_:
-                                if new_request is not None:
-                                    try:
-                                        maze, renderer, cell_size, screen = _apply_new_request(
-                                            new_request, maze, screen
-                                        )
-                                        request = new_request
-                                        key_map = _KEYS_BY_TYPE.get(request.maze_type, ORTHOGONAL_KEYS)
-                                        gradient = generate_gradient()
-                                        renderer.set_gradient(gradient)
-                                        arrows_consumed.clear()
-                                        drag.end()
-                                        pygame.display.set_caption(
-                                            f"Mazer — {request.maze_type.value} · "
-                                            f"{request.algorithm.value} {request.width}×{request.height}"
-                                        )
-                                    except MazeGenerationError:
-                                        menu_state.set_generation_error()
-                                        open_ = True
-                                if not open_:
-                                    pygame.key.set_repeat(0)
-                                    menu_state = None
-                                    menu_layout = None
+                            open_, new_request = menu_state.handle_mousedown(event.pos, menu_layout)
+                            _commit_menu_result(open_, new_request)
+                    elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                        if menu_layout is not None:
+                            open_, new_request = menu_state.handle_mouseup(event.pos, menu_layout)
+                            _commit_menu_result(open_, new_request)
 
                 # ---- Normal gameplay ----------------------------------------
                 elif event.type == pygame.KEYDOWN:

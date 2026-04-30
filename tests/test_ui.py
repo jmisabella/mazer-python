@@ -605,7 +605,7 @@ def test_menu_width_height_clamped_at_bounds() -> None:
 
 
 def test_menu_generate_returns_request() -> None:
-    """Enter on the Generate section closes the menu and returns a MazeRequest."""
+    """Enter (press then release) closes the menu and returns a MazeRequest."""
     from mazer.ui.menu import MenuState
 
     request = MazeRequest(
@@ -615,11 +615,15 @@ def test_menu_generate_returns_request() -> None:
         start=Coord(0, 0), goal=Coord(6, 7),
     )
     state = MenuState(request)
-    # Navigate to Generate.
-    while state.section != MenuState.SECTION_GENERATE:
-        state.handle_keydown(pygame.K_DOWN)
 
+    # KEYDOWN shows pressed state, does not generate yet.
     open_, new_req = state.handle_keydown(pygame.K_RETURN)
+    assert open_ is True
+    assert new_req is None
+    assert state.btn_pressed
+
+    # KEYUP fires generate.
+    open_, new_req = state.handle_keyup(pygame.K_RETURN)
     assert open_ is False
     assert new_req is not None
     assert new_req.maze_type == MazeType.ORTHOGONAL
@@ -655,15 +659,16 @@ def test_menu_generate_reflects_changed_selections() -> None:
         state.handle_keydown(pygame.K_RIGHT)
 
     state.section = MenuState.SECTION_GENERATE
-    _, new_req = state.handle_keydown(pygame.K_RETURN)
+    state.handle_keydown(pygame.K_RETURN)   # press → show visual
+    _, new_req = state.handle_keyup(pygame.K_RETURN)  # release → generate
     assert new_req is not None
     assert new_req.maze_type == MazeType.SIGMA
     assert new_req.width == 6
     assert new_req.height == 7
 
 
-def test_menu_enter_on_non_generate_does_not_close() -> None:
-    """Pressing Enter on any row other than Generate keeps the menu open."""
+def test_menu_enter_keydown_shows_pressed_without_generating() -> None:
+    """Enter KEYDOWN (from any section) shows Generate as pressed but does not generate."""
     from mazer.ui.menu import MenuState
 
     request = MazeRequest(
@@ -675,8 +680,10 @@ def test_menu_enter_on_non_generate_does_not_close() -> None:
     state = MenuState(request)
     assert state.section == MenuState.SECTION_TYPE
     open_, req = state.handle_keydown(pygame.K_RETURN)
-    assert open_ is True
-    assert req is None
+    assert open_ is True    # menu stays open
+    assert req is None      # not generated yet
+    assert state.btn_pressed
+    assert state.section == MenuState.SECTION_GENERATE
 
 
 def test_menu_set_generation_error_focuses_algo() -> None:
@@ -819,6 +826,152 @@ def test_menu_click_generate_button_returns_request() -> None:
     open_, req = state.handle_click((btn.centerx, btn.centery), layout)
     assert open_ is False
     assert req is not None
+
+
+def test_menu_space_keydown_sets_btn_pressed() -> None:
+    """Space KEYDOWN shows the Generate button as pressed without generating."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    state = MenuState(request)
+    open_, req = state.handle_keydown(pygame.K_SPACE)
+    assert open_ is True        # menu stays open
+    assert req is None          # not generated yet
+    assert state.btn_pressed    # pressed visual is active
+    assert state.section == MenuState.SECTION_GENERATE
+
+
+def test_menu_space_keyup_generates() -> None:
+    """Space KEYUP after KEYDOWN fires Generate and closes the menu."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    state = MenuState(request)
+    state.handle_keydown(pygame.K_SPACE)   # press
+    open_, req = state.handle_keyup(pygame.K_SPACE)  # release
+    assert open_ is False
+    assert req is not None
+    assert not state.btn_pressed
+
+
+def test_menu_space_keyup_without_keydown_is_noop() -> None:
+    """KEYUP for space without a preceding KEYDOWN is ignored."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    state = MenuState(request)
+    open_, req = state.handle_keyup(pygame.K_SPACE)
+    assert open_ is True
+    assert req is None
+
+
+def test_menu_mousedown_on_generate_sets_btn_pressed() -> None:
+    """MOUSEBUTTONDOWN on the Generate button shows pressed state, does not generate."""
+    from mazer.ui.menu import MenuState, draw_menu
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    surface = pygame.Surface((600, 500))
+    font = pygame.font.SysFont(None, 22)
+    state = MenuState(request)
+    layout = draw_menu(surface, state, font)
+
+    btn = layout.generate_btn
+    open_, req = state.handle_mousedown((btn.centerx, btn.centery), layout)
+    assert open_ is True    # menu stays open
+    assert req is None      # not fired yet
+    assert state.btn_pressed
+
+
+def test_menu_mouseup_on_generate_fires() -> None:
+    """MOUSEBUTTONUP over Generate (after mousedown) closes the menu and returns a request."""
+    from mazer.ui.menu import MenuState, draw_menu
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    surface = pygame.Surface((600, 500))
+    font = pygame.font.SysFont(None, 22)
+    state = MenuState(request)
+    layout = draw_menu(surface, state, font)
+
+    btn = layout.generate_btn
+    state.handle_mousedown((btn.centerx, btn.centery), layout)
+    open_, req = state.handle_mouseup((btn.centerx, btn.centery), layout)
+    assert open_ is False
+    assert req is not None
+    assert not state.btn_pressed
+
+
+def test_menu_mouseup_outside_generate_does_not_fire() -> None:
+    """Releasing the mouse outside the button after pressing it cancels the action."""
+    from mazer.ui.menu import MenuState, draw_menu
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    surface = pygame.Surface((600, 500))
+    font = pygame.font.SysFont(None, 22)
+    state = MenuState(request)
+    layout = draw_menu(surface, state, font)
+
+    btn = layout.generate_btn
+    state.handle_mousedown((btn.centerx, btn.centery), layout)
+    # Release somewhere far from the button.
+    open_, req = state.handle_mouseup((5, 5), layout)
+    assert open_ is True   # menu stays open — drag-away is a cancel
+    assert req is None
+    assert not state.btn_pressed
+
+
+def test_menu_btn_pressed_color_differs_from_normal() -> None:
+    """The Generate button pixel color changes when btn_pressed is True."""
+    from mazer.ui.menu import MenuState, draw_menu
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    surface = pygame.Surface((600, 500))
+    font = pygame.font.SysFont(None, 22)
+    state = MenuState(request)
+
+    layout = draw_menu(surface, state, font)
+    btn = layout.generate_btn
+    normal_pixel = surface.get_at((btn.centerx, btn.centery))
+
+    state.btn_pressed = True
+    draw_menu(surface, state, font)
+    pressed_pixel = surface.get_at((btn.centerx, btn.centery))
+
+    assert normal_pixel != pressed_pixel
 
 
 # --- App smoke test with menu -------------------------------------------

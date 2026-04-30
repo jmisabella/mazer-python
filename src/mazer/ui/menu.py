@@ -42,7 +42,9 @@ _ARROW_IDLE = (160, 160, 200)
 _ARROW_ACTIVE = (80, 100, 200)
 _BTN_COLOR = (60, 120, 220)
 _BTN_FOCUSED = (40, 90, 190)
+_BTN_PRESSED = (20, 55, 140)       # darker still — held-down / space-held visual
 _BTN_TEXT = (255, 255, 255)
+_BTN_PRESSED_TEXT = (200, 220, 255)  # slightly dimmed white for pressed state
 _ERROR_COLOR = (200, 30, 30)
 
 # ---------------------------------------------------------------------------
@@ -114,12 +116,14 @@ class MenuState:
         self.height: int = request.height
         self.section: int = self.SECTION_TYPE
         self.error: str | None = None
+        self.btn_pressed: bool = False  # True while Space or mouse button is held on Generate
 
     # -- Keyboard ------------------------------------------------------------
 
     def handle_keydown(self, key: int) -> tuple[bool, MazeRequest | None]:
         """Handle a KEYDOWN event. Returns ``(menu_open, request_or_None)``."""
         if key in (pygame.K_ESCAPE, pygame.K_m):
+            self.btn_pressed = False
             return False, None
         if key == pygame.K_UP:
             self.section = (self.section - 1) % self.NUM_SECTIONS
@@ -135,18 +139,33 @@ class MenuState:
         if key == pygame.K_RIGHT:
             self._change_value(1)
             return True, None
-        if key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-            return self._build_request()
+        if key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE) and not self.btn_pressed:
+            # Show the Generate button as pressed; fire on KEYUP so the visual
+            # feedback is visible before the menu closes.
+            self.btn_pressed = True
+            self.section = self.SECTION_GENERATE
+            return True, None
+        return True, None
+
+    def handle_keyup(self, key: int) -> tuple[bool, MazeRequest | None]:
+        """Handle a KEYUP event. Space and Enter fire Generate on release.
+
+        KEYDOWN only showed the pressed state; the actual generate happens here
+        so the button color change is visible before the menu closes.
+        """
+        if key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_KP_ENTER) and self.btn_pressed:
+            self.btn_pressed = False
+            return self._do_generate()
         return True, None
 
     # -- Mouse ---------------------------------------------------------------
 
-    def handle_click(
+    def handle_mousedown(
         self, pos: tuple[int, int], layout: MenuLayout
     ) -> tuple[bool, MazeRequest | None]:
-        """Handle a left-click. Returns the same tuple shape as ``handle_keydown``.
-
-        Clicks outside the panel cancel the menu (same as Esc / M).
+        """Handle MOUSEBUTTONDOWN. For the Generate button, shows pressed state
+        without firing yet — the generate fires on MOUSEBUTTONUP (``handle_mouseup``).
+        All other regions (arrows, row selection, outside-panel cancel) fire immediately.
         """
         if not layout.panel.collidepoint(pos):
             return False, None
@@ -162,7 +181,49 @@ class MenuState:
                 return True, None
         if layout.generate_btn.collidepoint(pos):
             self.section = self.SECTION_GENERATE
-            return self._build_request()
+            self.btn_pressed = True
+            return True, None
+        for section, rect in layout.rows.items():
+            if rect.collidepoint(pos):
+                self.section = section
+                return True, None
+        return True, None
+
+    def handle_mouseup(
+        self, pos: tuple[int, int], layout: MenuLayout
+    ) -> tuple[bool, MazeRequest | None]:
+        """Handle MOUSEBUTTONUP. Fires Generate if the button was held down and
+        the cursor is still over the button; always clears ``btn_pressed``."""
+        was_pressed = self.btn_pressed
+        self.btn_pressed = False
+        if was_pressed and layout.generate_btn.collidepoint(pos):
+            return self._do_generate()
+        return True, None
+
+    def handle_click(
+        self, pos: tuple[int, int], layout: MenuLayout
+    ) -> tuple[bool, MazeRequest | None]:
+        """Handle a left-click (fires on MOUSEDOWN — kept for backward compat).
+
+        Prefer ``handle_mousedown`` + ``handle_mouseup`` for the full press
+        visual; this method is retained so existing call-sites and tests keep
+        working without change.
+        """
+        if not layout.panel.collidepoint(pos):
+            return False, None
+        for section, rect in layout.left_arrows.items():
+            if rect.collidepoint(pos):
+                self.section = section
+                self._change_value(-1)
+                return True, None
+        for section, rect in layout.right_arrows.items():
+            if rect.collidepoint(pos):
+                self.section = section
+                self._change_value(1)
+                return True, None
+        if layout.generate_btn.collidepoint(pos):
+            self.section = self.SECTION_GENERATE
+            return self._do_generate()
         for section, rect in layout.rows.items():
             if rect.collidepoint(pos):
                 self.section = section
@@ -191,9 +252,8 @@ class MenuState:
         elif self.section == self.SECTION_HEIGHT:
             self.height = max(self.MIN_SIZE, min(self.MAX_SIZE, self.height + delta))
 
-    def _build_request(self) -> tuple[bool, MazeRequest | None]:
-        if self.section != self.SECTION_GENERATE:
-            return True, None
+    def _do_generate(self) -> tuple[bool, MazeRequest | None]:
+        """Build and return a MazeRequest unconditionally (section check bypassed)."""
         maze_type = self.SUPPORTED_TYPES[self.type_idx]
         algorithm = self.ALGORITHMS[self.algo_idx]
         return False, MazeRequest(
@@ -205,6 +265,11 @@ class MenuState:
             start=Coord(x=0, y=0),
             goal=Coord(x=self.width - 1, y=self.height - 1),
         )
+
+    def _build_request(self) -> tuple[bool, MazeRequest | None]:
+        if self.section != self.SECTION_GENERATE:
+            return True, None
+        return self._do_generate()
 
 
 # ---------------------------------------------------------------------------
@@ -298,9 +363,17 @@ def draw_menu(
     btn_rect = pygame.Rect(px + (_MENU_W - btn_w) // 2, cy, btn_w, _BTN_H)
     layout.generate_btn = btn_rect
     layout.rows[MenuState.SECTION_GENERATE] = btn_rect
-    btn_color = _BTN_FOCUSED if state.section == MenuState.SECTION_GENERATE else _BTN_COLOR
+    if state.btn_pressed:
+        btn_color = _BTN_PRESSED
+        txt_color = _BTN_PRESSED_TEXT
+    elif state.section == MenuState.SECTION_GENERATE:
+        btn_color = _BTN_FOCUSED
+        txt_color = _BTN_TEXT
+    else:
+        btn_color = _BTN_COLOR
+        txt_color = _BTN_TEXT
     pygame.draw.rect(surface, btn_color, btn_rect, border_radius=8)
-    btn_text = font.render("Generate", True, _BTN_TEXT)
+    btn_text = font.render("Generate", True, txt_color)
     surface.blit(btn_text, btn_text.get_rect(center=btn_rect.center))
 
     # Error message.

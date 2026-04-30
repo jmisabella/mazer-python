@@ -128,6 +128,26 @@ _HUD_HINT_BY_TYPE: dict[MazeType, str] = {
 }
 
 
+def _delta_horizontal(direction: Direction, cells: list) -> Direction:
+    """Map LEFT/RIGHT to the orientation-correct diagonal for the active delta cell.
+
+    Normal cells (apex up) have UpperLeft/UpperRight as horizontal neighbors.
+    Inverted cells (apex down) have LowerLeft/LowerRight.  Sending the exact
+    diagonal skips the Rust fallback's intermediate attempt at the wrong
+    diagonal (which has no neighbor on the current cell), preventing the
+    one-cell-then-stuck behaviour when holding LEFT or RIGHT in a delta maze.
+    """
+    active = next((c for c in cells if c.is_active), None)
+    if active is None:
+        return direction
+    is_normal = active.orientation.lower() == "normal"
+    if direction == Direction.LEFT:
+        return Direction.UPPER_LEFT if is_normal else Direction.LOWER_LEFT
+    if direction == Direction.RIGHT:
+        return Direction.UPPER_RIGHT if is_normal else Direction.LOWER_RIGHT
+    return direction
+
+
 def _resolve_chord(up: bool, down: bool, left: bool, right: bool) -> Direction | None:
     """Resolve held arrow keys to a single Direction.
 
@@ -545,6 +565,16 @@ def main(argv: list[str] | None = None) -> None:
                             keys[pygame.K_RIGHT],
                         )
                         if direction is not None:
+                            # Delta mazes have no native Left/Right neighbors.
+                            # Map the cardinal to the exact horizontal diagonal
+                            # for the active cell's orientation so hold-to-move
+                            # works reliably (avoids the Rust fallback stalling
+                            # on the wrong diagonal after every alternating cell).
+                            if (
+                                request.maze_type == MazeType.DELTA
+                                and direction in (Direction.LEFT, Direction.RIGHT)
+                            ):
+                                direction = _delta_horizontal(direction, maze.cells())
                             maze.move(direction)
                             held_arrows = [k for k in ARROW_KEYS if keys[k]]
                             if len(held_arrows) > 1:

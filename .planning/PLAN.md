@@ -461,7 +461,7 @@ Tests: 13 new tests in `test_ui.py` covering `MenuState` unit logic (initial sta
 
 Verified: 92 passed, 1 skipped (was 79 + 1 before this session). Full suite ~0.41s. Interactive acceptance (visual menu appearance, Generate with type switch) requires user at a real display.
 
-## SESSION 12 [uncompleted]
+## SESSION 12 [completed 2026-04-29]
 ### Stage 11 — Delta (triangular) grid rendering and play
 
 Add full support for the Delta maze type: rendering, key mapping, hit-testing, and integration test.
@@ -476,6 +476,37 @@ Scope:
 Reference: `DeltaCellView.swift`, `DeltaMazeView.swift` in the iOS reference.
 
 Note: Delta uses six directions (`Up`, `UpperLeft`, `UpperRight`, `Down`, `LowerLeft`, `LowerRight`) — same as Sigma, so the eight-way control and the chord resolver already cover it. The complexity is purely in the cell geometry and hit-testing.
+
+#### Session 12 notes
+
+**Orientation rule** confirmed from Rust `initialize_triangle_cells`: `(col + row) % 2 == 0` → Normal (apex up), else Inverted (apex down). Matches `DeltaCellView.swift`'s `cell.orientation.lowercased() == "normal"` predicate.
+
+**Triangle geometry** ported from `DeltaCellView.swift` and `DeltaMazeView.swift`:
+- `tri_height = cell_size * sqrt(3) / 2`
+- Cell (col, row) bounding-rect left edge: `col * cell_size / 2` (iOS HStack spacing = `-cell_size/2`)
+- Normal vertices: apex `(x0 + cell_size/2, y0)`, bottom-left `(x0, y0+h)`, bottom-right `(x0+cell_size, y0+h)`
+- Inverted vertices: top-left `(x0, y0)`, top-right `(x0+cell_size, y0)`, apex `(x0+cell_size/2, y0+h)`
+- Bounding box: `cell_size*(cols+1)/2` wide, `tri_height*rows` tall
+
+**Direction→edge mapping** (from `DeltaCellView.swift` wall-drawing code):
+- Normal: `UpperLeft`=edge[0→1], `UpperRight`=edge[0→2], `Down`=edge[1→2]
+- Inverted: `Up`=edge[0→1], `LowerLeft`=edge[0→2], `LowerRight`=edge[1→2]
+
+**No boundary-clamp ambiguity**: unlike Sigma, delta neighbor assignment (`assign_neighbors_delta` in grid.rs) is unambiguous — each direction maps to exactly one neighbor coord with no clamping. The integration test uses a simple orientation-conditioned direction→offset dict rather than the candidate-delta approach needed for Sigma.
+
+**Key mapping**: `DELTA_KEYS` is an alias for `SIGMA_KEYS` (W/Q/E/Z/X/C + ↑/↓). The Rust `make_move` fallback resolves each direction to the correct triangle edge for the current cell orientation. Same chord resolver and drag sector mapping as Sigma/Orthogonal.
+
+**Drag mapping**: Delta uses the 8-sector orthogonal mapping (same as iOS's 8-direction `atan2` dispatch). The Rust `make_move` fallback ensures diagonal inputs still produce sensible moves on Normal (UpperLeft/UpperRight/Down) and Inverted (LowerLeft/LowerRight/Up) cells.
+
+**Wall stroke width** from `MazeCellAppearance.swift`: denominator 10 at `cell_size >= 28`, else 12, then multiply by 1.15 (same iOS `snapped * 1.15` factor).
+
+**`delta_direction` helper** added to `renderer.py` for click-to-move. Reads the coord delta and returns the matching direction only if it's in `active.linked`. Clean O(1) lookup with no candidate-offset iteration needed.
+
+**Menu integration**: `MazeType.DELTA` added to `MenuState.SUPPORTED_TYPES` so the in-game settings menu cycles through all three implemented types.
+
+**Tests** (6 new): `test_delta_renderer_draws_without_error`, `test_delta_cell_at_resolves_clicks`, `test_solve_delta_maze_by_following_solution_path` (integration), updated `test_make_renderer_dispatch` (delta no longer raises, RHOMBIC now the test for NotImplementedError).
+
+Verified: 98 passed, 0 skipped (was 92 + 1 skipped before this session — the Stage 5 placeholder skipped test is gone, likely cleared in an earlier session). Full suite ~0.35s. App smoke test under `SDL_VIDEODRIVER=dummy` with W/Q/E/Z/X/C/H/S/R keys + QUIT exits cleanly.
 
 ## SESSION 13 [uncompleted]
 ### Stage 12 — Rhombic grid rendering and play

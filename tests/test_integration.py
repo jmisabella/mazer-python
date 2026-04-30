@@ -255,6 +255,85 @@ def test_solve_sigma_maze_by_following_solution_path() -> None:
         assert final_active.coord == Coord(width - 1, height - 1)
 
 
+def _delta_offset(direction: Direction, col: int, row: int) -> tuple[int, int] | None:
+    """Coordinate offset for a delta direction, conditioned on cell orientation.
+
+    Normal cell ((col+row) even — apex up): UpperLeft=(-1,0), UpperRight=(+1,0), Down=(0,+1).
+    Inverted cell ((col+row) odd — apex down): LowerLeft=(-1,0), LowerRight=(+1,0), Up=(0,-1).
+    Returns None for directions that aren't valid for this orientation.
+    """
+    is_normal = (col + row) % 2 == 0
+    if is_normal:
+        return {
+            Direction.UPPER_LEFT: (-1, 0),
+            Direction.UPPER_RIGHT: (1, 0),
+            Direction.DOWN: (0, 1),
+        }.get(direction)
+    else:
+        return {
+            Direction.LOWER_LEFT: (-1, 0),
+            Direction.LOWER_RIGHT: (1, 0),
+            Direction.UP: (0, -1),
+        }.get(direction)
+
+
+def test_solve_delta_maze_by_following_solution_path() -> None:
+    """Same path-walk pattern as the Orthogonal and Sigma solver tests, on a triangle grid.
+
+    Delta direction→offset depends on whether the active cell is Normal
+    (apex up, even col+row sum) or Inverted (apex down, odd sum).
+    Proves the FFI + wrapper handle triangular linkage end-to-end.
+    """
+    width, height = 10, 8
+    request = MazeRequest(
+        maze_type=MazeType.DELTA,
+        width=width,
+        height=height,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0),
+        goal=Coord(width - 1, height - 1),
+    )
+
+    with Maze(request) as m:
+        visited: set[Coord] = set()
+        max_steps = width * height
+        for _ in range(max_steps):
+            cells = m.cells()
+            active = _active(cells)
+            visited.add(active.coord)
+            if active.is_goal:
+                break
+            by_coord = _by_coord(cells)
+            next_direction: Direction | None = None
+            for direction in active.linked:
+                offset = _delta_offset(direction, active.coord.x, active.coord.y)
+                if offset is None:
+                    continue
+                dx, dy = offset
+                target = Coord(active.coord.x + dx, active.coord.y + dy)
+                neighbor = by_coord.get(target)
+                if (
+                    neighbor is not None
+                    and neighbor.on_solution_path
+                    and target not in visited
+                ):
+                    next_direction = direction
+                    break
+            assert next_direction is not None, (
+                f"no forward solution-path move from {active.coord}; "
+                f"linked={active.linked}, visited={visited}"
+            )
+            assert m.move(next_direction) is True, (
+                f"move {next_direction} from {active.coord} unexpectedly rejected"
+            )
+        else:  # pragma: no cover - guard against an infinite loop on a regression
+            pytest.fail(f"did not reach goal within {max_steps} moves")
+
+        final_active = _active(m.cells())
+        assert final_active.is_goal
+        assert final_active.coord == Coord(width - 1, height - 1)
+
+
 @pytest.mark.parametrize("algorithm", list(Algorithm))
 def test_multiple_algorithms_all_produce_valid_mazes(algorithm: Algorithm) -> None:
     """Every algorithm produces a solvable Orthogonal maze.

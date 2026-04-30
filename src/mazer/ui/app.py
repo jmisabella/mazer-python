@@ -65,12 +65,13 @@ from mazer.ui.renderer import (
 HUD_HEIGHT = 56
 
 # Per-maze-type defaults. Tuple of (cell_size, width, height) — the
-# default algorithm is the same (RecursiveBacktracker) for both because
-# it produces winding paths that show off the heatmap and solution-path
+# default algorithm is RecursiveBacktracker for all types because it
+# produces winding paths that show off the heatmap and solution-path
 # overlays well; user can override with --algo.
 _DEFAULTS: dict[MazeType, tuple[int, int, int]] = {
     MazeType.ORTHOGONAL: (28, 20, 20),
     MazeType.SIGMA: (26, 11, 10),
+    MazeType.DELTA: (30, 20, 12),
 }
 
 ORTHOGONAL_KEYS: dict[int, Direction] = {
@@ -95,9 +96,15 @@ SIGMA_KEYS: dict[int, Direction] = {
     pygame.K_c: Direction.LOWER_RIGHT,
 }
 
+# Delta uses the same six-direction layout as Sigma. The Rust make_move
+# fallback resolves each direction to the correct triangle edge for the
+# current cell orientation (Normal vs Inverted).
+DELTA_KEYS: dict[int, Direction] = SIGMA_KEYS
+
 _KEYS_BY_TYPE: dict[MazeType, dict[int, Direction]] = {
     MazeType.ORTHOGONAL: ORTHOGONAL_KEYS,
     MazeType.SIGMA: SIGMA_KEYS,
+    MazeType.DELTA: DELTA_KEYS,
 }
 
 ARROW_KEYS: tuple[int, ...] = (pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT)
@@ -105,6 +112,7 @@ ARROW_KEYS: tuple[int, ...] = (pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame
 _HUD_HINT_BY_TYPE: dict[MazeType, str] = {
     MazeType.ORTHOGONAL: "arrows + chords + drag/click",
     MazeType.SIGMA: "chords / W·Q·E·Z·X·C / drag/click",
+    MazeType.DELTA: "chords / W·Q·E·Z·X·C / drag/click",
 }
 
 
@@ -171,16 +179,17 @@ _SIGMA_SECTOR_DIRECTIONS = (
 def _direction_from_vector(dx: float, dy: float, maze_type: MazeType) -> Direction | None:
     """Resolve a drag vector to a Direction based on maze type.
 
-    Orthogonal: angle mapped to the nearest of 8 directions (45° sectors).
-      Diagonal directions are passed to the Rust which tries the vertical
-      component first, then horizontal — smooth trackpad fallback.
-    Sigma: angle mapped to the nearest of 6 hex directions (60° sectors).
+    Orthogonal/Delta: angle mapped to nearest of 8 directions (45° sectors).
+      Diagonal directions are passed to the Rust which applies per-type
+      fallback — e.g. UPPER_RIGHT on a Normal delta cell tries UpperRight
+      directly; on an Inverted cell the Rust resolves it to Up or Right.
+    Sigma: angle mapped to nearest of 6 hex directions (60° sectors).
     Returns None for zero-length vectors or unimplemented maze types.
     """
     if dx == 0 and dy == 0:
         return None
     angle = (math.degrees(math.atan2(dy, dx)) + 360) % 360
-    if maze_type == MazeType.ORTHOGONAL:
+    if maze_type in (MazeType.ORTHOGONAL, MazeType.DELTA):
         sector = int((angle + 22.5) / 45) % 8
         return _ORTHO_SECTOR_DIRECTIONS[sector]
     if maze_type == MazeType.SIGMA:
@@ -248,9 +257,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--type",
         dest="maze_type",
-        choices=[m.value.lower() for m in (MazeType.ORTHOGONAL, MazeType.SIGMA)],
+        choices=[m.value.lower() for m in (MazeType.ORTHOGONAL, MazeType.SIGMA, MazeType.DELTA)],
         default=MazeType.ORTHOGONAL.value.lower(),
-        help="Maze type. Stage 6 supports orthogonal (default) and sigma (hex).",
+        help="Maze type: orthogonal (default), sigma (hex), or delta (triangular).",
     )
     parser.add_argument("--width", type=int, default=None, help="Grid width (cells). Default depends on type.")
     parser.add_argument("--height", type=int, default=None, help="Grid height (cells). Default depends on type.")
@@ -285,7 +294,8 @@ def _window_size(request: MazeRequest, cell_size: int) -> tuple[int, int]:
     """Compute the window size for a request without touching pygame.
 
     Orthogonal: width = W*cell, height = H*cell + HUD.
-    Sigma: bounding box from the iOS reference's hex layout, plus HUD.
+    Sigma: hex bounding box from the iOS reference layout, plus HUD.
+    Delta: triangle bounding box (cell_size*(cols+1)/2 × tri_height*rows), plus HUD.
     """
     if request.maze_type == MazeType.ORTHOGONAL:
         return (request.width * cell_size, request.height * cell_size + HUD_HEIGHT)
@@ -293,6 +303,11 @@ def _window_size(request: MazeRequest, cell_size: int) -> tuple[int, int]:
         hex_height = math.sqrt(3) * cell_size
         w = int(round(cell_size * (1.5 * request.width + 0.5)))
         h = int(round(hex_height * (request.height + 0.5))) + HUD_HEIGHT
+        return (w, h)
+    if request.maze_type == MazeType.DELTA:
+        tri_height = math.sqrt(3) / 2 * cell_size
+        w = int(round(cell_size * (request.width + 1) / 2))
+        h = int(round(tri_height * request.height)) + HUD_HEIGHT
         return (w, h)
     raise NotImplementedError(f"window sizing for {request.maze_type.value}")
 

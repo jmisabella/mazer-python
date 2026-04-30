@@ -96,15 +96,62 @@ def test_sigma_renderer_draws_without_error() -> None:
     assert _surface_has_content(surface)
 
 
+def test_delta_renderer_draws_without_error() -> None:
+    """A small delta maze should render triangles + walls + active marker cleanly."""
+    from mazer.ui.renderer import DeltaRenderer
+
+    surface = pygame.Surface((400, 400))
+    request = MazeRequest(
+        maze_type=MazeType.DELTA,
+        width=8,
+        height=6,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0),
+        goal=Coord(7, 5),
+    )
+    with Maze(request) as m:
+        renderer = DeltaRenderer(surface, cell_size=30)
+        renderer.draw(m.cells(), show_heatmap=False, show_solution=False)
+        renderer.draw(m.cells(), show_heatmap=True, show_solution=True)
+    assert _surface_has_content(surface)
+
+
+def test_delta_cell_at_resolves_clicks() -> None:
+    """Clicking at the centroid of a triangle resolves to that cell's coord."""
+    from mazer.ui.renderer import DeltaRenderer
+
+    cell_size = 40
+    surface = pygame.Surface((500, 400))
+    request = MazeRequest(
+        maze_type=MazeType.DELTA,
+        width=6,
+        height=4,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0),
+        goal=Coord(5, 3),
+    )
+    with Maze(request) as m:
+        cells = m.cells()
+        renderer = DeltaRenderer(surface, cell_size=cell_size)
+        # Check two cells: (0,0) is Normal (apex up), (1,0) is Inverted (apex down).
+        for coord in (Coord(0, 0), Coord(1, 0), Coord(2, 1), Coord(3, 2)):
+            cx, cy = renderer._cell_center(coord.x, coord.y)
+            result = renderer.cell_at((int(round(cx)), int(round(cy))), cells)
+            assert result == coord, f"cell_at centroid of {coord} returned {result}"
+        # A click outside the maze rect returns None.
+        assert renderer.cell_at((-5, -5), cells) is None
+
+
 def test_make_renderer_dispatch() -> None:
     """The factory returns a renderer matching the maze type, or raises."""
-    from mazer.ui.renderer import OrthogonalRenderer, SigmaRenderer, make_renderer
+    from mazer.ui.renderer import DeltaRenderer, OrthogonalRenderer, SigmaRenderer, make_renderer
 
     surface = pygame.Surface((100, 100))
     assert isinstance(make_renderer(MazeType.ORTHOGONAL, surface, 20), OrthogonalRenderer)
     assert isinstance(make_renderer(MazeType.SIGMA, surface, 20), SigmaRenderer)
+    assert isinstance(make_renderer(MazeType.DELTA, surface, 20), DeltaRenderer)
     with pytest.raises(NotImplementedError):
-        make_renderer(MazeType.DELTA, surface, 20)
+        make_renderer(MazeType.RHOMBIC, surface, 20)
 
 
 # --- Chord arrow resolver -------------------------------------------------

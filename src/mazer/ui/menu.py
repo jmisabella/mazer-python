@@ -94,7 +94,7 @@ class MenuLayout:
 class MenuState:
     """State for the in-game settings menu."""
 
-    SUPPORTED_TYPES: list[MazeType] = [MazeType.ORTHOGONAL, MazeType.SIGMA]
+    SUPPORTED_TYPES: list[MazeType] = [MazeType.ORTHOGONAL, MazeType.SIGMA, MazeType.DELTA]
     ALGORITHMS: list[Algorithm] = list(Algorithm)
 
     SECTION_TYPE = 0

@@ -5,8 +5,9 @@ Look-and-feel mirrors the iOS reference app
 and ``Layout/MazeCellAppearance.swift``):
 
 * Wall stroke for orthogonal = ``cell_size // 12``; for sigma it's
-  ``cell_size // 6`` at ``cell_size >= 18`` and ``cell_size // 7`` below
-  (denominator from ``wallStrokeWidth(for:cellSize:)``).
+  ``cell_size // 6`` at ``cell_size >= 18`` and ``cell_size // 7`` below;
+  for delta ``cell_size / 10 * 1.15`` at ``cell_size >= 28`` else
+  ``cell_size / 12 * 1.15`` (denominators from ``wallStrokeWidth(for:cellSize:)``).
 * Heatmap default is the "Belize Hole" 10-shade gradient from
   ``HeatMapPalette.swift``; index = ``min(9, distance * 10 / max_distance)``.
 * Cell background uses ``CellColors.offWhite`` (#FFF5E6) with the same
@@ -16,11 +17,10 @@ and ``Layout/MazeCellAppearance.swift``):
   ``CellColors``.
 
 Dispatch:
-    Both renderer classes expose ``draw(cells, show_heatmap, show_solution)``
+    All renderer classes expose ``draw(cells, show_heatmap, show_solution)``
     and ``maze_rect(cells)``. The app picks the right one for a maze via
-    :func:`make_renderer`. Only Orthogonal and Sigma are implemented in
-    Stage 6; the other three maze types raise ``NotImplementedError`` from
-    the factory so the omission is loud rather than silent.
+    :func:`make_renderer`. Orthogonal, Sigma, and Delta are implemented;
+    Rhombic and Upsilon raise ``NotImplementedError`` from the factory.
 
 Hex layout (Sigma):
     Flat-top hexagons in odd-q vertical offset, ported from the iOS
@@ -34,6 +34,19 @@ Hex layout (Sigma):
     Direction → edge (vertex-index pair) ported from
     ``HexDirection.vertexIndices``: UP=(0,1), UPPER_RIGHT=(1,2),
     LOWER_RIGHT=(2,3), DOWN=(3,4), LOWER_LEFT=(4,5), UPPER_LEFT=(5,0).
+
+Triangle layout (Delta):
+    Equilateral triangles alternating upward (Normal) and downward (Inverted)
+    in each row, ported from ``DeltaCellView``/``DeltaMazeView``. Each
+    triangle has bounding-box width ``cell_size`` and height
+    ``cell_size * sqrt(3) / 2``. Adjacent cells share a ``cell_size / 2``
+    overlap (HStack spacing = ``-cell_size / 2`` in iOS). Cell (col, row)
+    has its bounding-rect left edge at ``col * cell_size / 2``.
+
+    Orientation: ``(col + row) % 2 == 0`` → Normal (apex up), else Inverted
+    (apex down). Directions:
+      Normal  — UpperLeft (left slant), UpperRight (right slant), Down (base).
+      Inverted — Up (top base), LowerLeft (left slant), LowerRight (right slant).
 """
 
 from __future__ import annotations
@@ -714,6 +727,200 @@ class SigmaRenderer:
         self.surface.blit(text, text.get_rect(center=center))
 
 
+# --- Delta (triangular) ---------------------------------------------------
+
+
+def delta_direction(active: Cell, target: Coord) -> Direction | None:
+    """Find the direction in ``active.linked`` that connects to ``target``.
+
+    Delta neighbor mapping is unambiguous (no boundary-clamp issue):
+      Normal cell  (col+row even): UpperLeft=(-1,0), UpperRight=(+1,0), Down=(0,+1).
+      Inverted cell (col+row odd): LowerLeft=(-1,0), LowerRight=(+1,0), Up=(0,-1).
+    We look up the coord delta and return the matching direction only if it
+    appears in ``active.linked``.
+    """
+    col, row = active.coord.x, active.coord.y
+    dx, dy = target.x - col, target.y - row
+    is_normal = (col + row) % 2 == 0
+    mapping: dict[tuple[int, int], Direction]
+    if is_normal:
+        mapping = {(-1, 0): Direction.UPPER_LEFT, (1, 0): Direction.UPPER_RIGHT, (0, 1): Direction.DOWN}
+    else:
+        mapping = {(-1, 0): Direction.LOWER_LEFT, (1, 0): Direction.LOWER_RIGHT, (0, -1): Direction.UP}
+    direction = mapping.get((dx, dy))
+    if direction is None or direction not in active.linked:
+        return None
+    return direction
+
+
+class DeltaRenderer:
+    """Renders a delta (equilateral-triangle) maze onto a Pygame surface.
+
+    Each cell is an equilateral triangle. Normal cells (``(col+row) % 2 == 0``)
+    point upward; Inverted cells point downward. Adjacent cells share a
+    ``cell_size / 2`` horizontal overlap, matching the iOS HStack layout.
+
+    Bounding box: ``cell_size * (cols + 1) / 2`` wide,
+    ``tri_height * rows`` tall (ported from ``DeltaMazeView``).
+    """
+
+    def __init__(
+        self,
+        surface: pygame.Surface,
+        cell_size: int,
+        offset: tuple[int, int] = (0, 0),
+        palette=HEATMAP_BELIZE_HOLE,
+    ) -> None:
+        self.surface = surface
+        self.cell_size = cell_size
+        self.offset_x, self.offset_y = offset
+        self.palette = palette
+        self.tri_height = _SQRT3 / 2 * cell_size
+        # Delta wall stroke from iOS MazeCellAppearance.swift:
+        # denominator 10 at cell_size>=28, else 12, multiplied by 1.15.
+        denom = 10 if cell_size >= 28 else 12
+        self.wall_width = max(1, int(round(cell_size / denom * 1.15)))
+        self._marker_font = pygame.font.SysFont(None, max(12, int(cell_size * 0.7)))
+        self.gradient: GradientTheme | None = None
+
+    def set_gradient(self, gradient: GradientTheme | None) -> None:
+        self.gradient = gradient
+
+    def maze_rect(self, cells: list[Cell]) -> pygame.Rect:
+        cols = max(c.coord.x for c in cells) + 1
+        rows = max(c.coord.y for c in cells) + 1
+        w = int(round(self.cell_size * (cols + 1) / 2))
+        h = int(round(self.tri_height * rows))
+        return pygame.Rect(self.offset_x, self.offset_y, w, h)
+
+    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool) -> None:
+        if not cells:
+            return
+        max_distance = max(c.distance for c in cells)
+        total_rows = max(c.coord.y for c in cells) + 1
+        bbox = self.maze_rect(cells)
+        bg = self.gradient.base if self.gradient is not None else OFF_WHITE
+        pygame.draw.rect(self.surface, bg, bbox)
+        for cell in cells:
+            self._draw_cell(cell, max_distance, total_rows, show_heatmap, show_solution)
+        pygame.draw.rect(self.surface, BORDER_COLOR, bbox, BORDER_WIDTH)
+
+    def cell_at(self, pos: tuple[int, int], cells: list[Cell]) -> Coord | None:
+        """Pixel → grid coord. Returns ``None`` if the click missed all triangles."""
+        if not self.maze_rect(cells).collidepoint(pos):
+            return None
+        px, py = pos
+        best: Coord | None = None
+        best_dist_sq = float("inf")
+        for cell in cells:
+            cx, cy = self._cell_center(cell.coord.x, cell.coord.y)
+            d = (cx - px) ** 2 + (cy - py) ** 2
+            if d < best_dist_sq:
+                best_dist_sq = d
+                best = cell.coord
+        if best is None:
+            return None
+        if not _point_in_polygon((px, py), self._cell_polygon(best.x, best.y)):
+            return None
+        return best
+
+    def _cell_polygon(self, col: int, row: int) -> list[tuple[float, float]]:
+        """Three vertices of the triangle at (col, row)."""
+        x0 = self.offset_x + col * self.cell_size / 2
+        y0 = self.offset_y + row * self.tri_height
+        cs = self.cell_size
+        th = self.tri_height
+        if (col + row) % 2 == 0:
+            # Normal: apex at top
+            return [(x0 + cs / 2, y0), (x0, y0 + th), (x0 + cs, y0 + th)]
+        else:
+            # Inverted: apex at bottom
+            return [(x0, y0), (x0 + cs, y0), (x0 + cs / 2, y0 + th)]
+
+    def _cell_center(self, col: int, row: int) -> tuple[float, float]:
+        poly = self._cell_polygon(col, row)
+        return (sum(p[0] for p in poly) / 3, sum(p[1] for p in poly) / 3)
+
+    def _draw_cell(
+        self,
+        cell: Cell,
+        max_distance: int,
+        total_rows: int,
+        show_heatmap: bool,
+        show_solution: bool,
+    ) -> None:
+        col, row = cell.coord.x, cell.coord.y
+        is_normal = (col + row) % 2 == 0
+        polygon = self._cell_polygon(col, row)
+
+        pygame.draw.polygon(
+            self.surface,
+            cell_color(cell, max_distance, total_rows, show_heatmap, show_solution, self.palette, self.gradient),
+            polygon,
+        )
+
+        w = self.wall_width
+        if is_normal:
+            if Direction.UPPER_LEFT not in cell.linked:
+                pygame.draw.line(self.surface, WALL_COLOR, polygon[0], polygon[1], w)
+            if Direction.UPPER_RIGHT not in cell.linked:
+                pygame.draw.line(self.surface, WALL_COLOR, polygon[0], polygon[2], w)
+            if Direction.DOWN not in cell.linked:
+                pygame.draw.line(self.surface, WALL_COLOR, polygon[1], polygon[2], w)
+        else:
+            if Direction.UP not in cell.linked:
+                pygame.draw.line(self.surface, WALL_COLOR, polygon[0], polygon[1], w)
+            if Direction.LOWER_LEFT not in cell.linked:
+                pygame.draw.line(self.surface, WALL_COLOR, polygon[0], polygon[2], w)
+            if Direction.LOWER_RIGHT not in cell.linked:
+                pygame.draw.line(self.surface, WALL_COLOR, polygon[1], polygon[2], w)
+
+        center = self._cell_center(col, row)
+        center_int = (int(round(center[0])), int(round(center[1])))
+
+        if cell.is_active:
+            radius = max(2, self.cell_size // 5)
+            pygame.draw.circle(self.surface, ACTIVE_MARKER_COLOR, center_int, radius)
+            pygame.draw.circle(self.surface, WALL_COLOR, center_int, radius, max(1, w // 2))
+            self._draw_open_exit_dots(cell, center, polygon, is_normal)
+
+    def _draw_open_exit_dots(
+        self,
+        cell: Cell,
+        center: tuple[float, float],
+        polygon: list[tuple[float, float]],
+        is_normal: bool,
+    ) -> None:
+        cx, cy = center
+        dot_radius = max(2, self.cell_size // 12)
+        outline = max(1, dot_radius // 2)
+        edges: list[tuple[Direction, tuple[float, float], tuple[float, float]]]
+        if is_normal:
+            edges = [
+                (Direction.UPPER_LEFT, polygon[0], polygon[1]),
+                (Direction.UPPER_RIGHT, polygon[0], polygon[2]),
+                (Direction.DOWN, polygon[1], polygon[2]),
+            ]
+        else:
+            edges = [
+                (Direction.UP, polygon[0], polygon[1]),
+                (Direction.LOWER_LEFT, polygon[0], polygon[2]),
+                (Direction.LOWER_RIGHT, polygon[1], polygon[2]),
+            ]
+        for direction, va, vb in edges:
+            if direction not in cell.linked:
+                continue
+            mx = (va[0] + vb[0]) / 2
+            my = (va[1] + vb[1]) / 2
+            pos = (cx + 0.6 * (mx - cx), cy + 0.6 * (my - cy))
+            pygame.draw.circle(self.surface, OPEN_EXIT_DOT_COLOR, pos, dot_radius)
+            pygame.draw.circle(self.surface, WALL_COLOR, pos, dot_radius, outline)
+
+    def _draw_letter(self, center: tuple[int, int], letter: str) -> None:
+        text = self._marker_font.render(letter, True, LETTER_COLOR)
+        self.surface.blit(text, text.get_rect(center=center))
+
+
 # --- Dispatch -------------------------------------------------------------
 
 
@@ -726,15 +933,16 @@ def make_renderer(
 ):
     """Return the renderer matching a maze type. Raises for unimplemented types.
 
-    Stage 6 implements Orthogonal and Sigma. Delta / Rhombic / Upsilon
-    raise ``NotImplementedError`` rather than silently falling back so a
-    caller asking for them gets a clear error pointing at this function.
+    Orthogonal, Sigma, and Delta are implemented. Rhombic and Upsilon
+    raise ``NotImplementedError`` rather than silently falling back.
     """
     if maze_type == MazeType.ORTHOGONAL:
         return OrthogonalRenderer(surface, cell_size, offset=offset, palette=palette)
     if maze_type == MazeType.SIGMA:
         return SigmaRenderer(surface, cell_size, offset=offset, palette=palette)
-    raise NotImplementedError(f"No renderer implemented for {maze_type.value} (Stage 6 covers Orthogonal + Sigma)")
+    if maze_type == MazeType.DELTA:
+        return DeltaRenderer(surface, cell_size, offset=offset, palette=palette)
+    raise NotImplementedError(f"No renderer implemented for {maze_type.value} (Orthogonal, Sigma, Delta supported)")
 
 
 # Back-compat: existing callers still reference ``Renderer`` for the
@@ -743,6 +951,7 @@ Renderer = OrthogonalRenderer
 
 
 __all__ = [
+    "DeltaRenderer",
     "GradientTheme",
     "HEATMAP_BELIZE_HOLE",
     "OFF_WHITE",
@@ -752,6 +961,7 @@ __all__ = [
     "SigmaRenderer",
     "build_sigma_linked_pairs",
     "cell_color",
+    "delta_direction",
     "generate_gradient",
     "hex_candidate_deltas",
     "hex_offset_delta",

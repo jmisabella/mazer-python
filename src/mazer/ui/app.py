@@ -57,6 +57,7 @@ from mazer.maze import Cell, Maze
 from mazer.types import Algorithm, Coord, Direction, MazeRequest, MazeType
 from mazer.ui.renderer import (
     OFF_WHITE,
+    generate_gradient,
     make_renderer,
 )
 
@@ -338,6 +339,8 @@ def main(argv: list[str] | None = None) -> None:
 
     maze = Maze(request)
     renderer = make_renderer(request.maze_type, screen, cell_size, offset=(0, HUD_HEIGHT))
+    gradient = generate_gradient()
+    renderer.set_gradient(gradient)
     show_heatmap = False
     show_solution = False
     # Once a chord fires from a multi-arrow KEYDOWN, mark every held arrow
@@ -363,6 +366,8 @@ def main(argv: list[str] | None = None) -> None:
                     elif event.key in (pygame.K_r, pygame.K_n):
                         maze.close()
                         maze = Maze(request)
+                        gradient = generate_gradient(gradient.base)
+                        renderer.set_gradient(gradient)
                         arrows_consumed.clear()
                         drag.end()
                     elif event.key in ARROW_KEYS:

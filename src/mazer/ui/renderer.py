@@ -39,6 +39,8 @@ Hex layout (Sigma):
 from __future__ import annotations
 
 import math
+import random
+from typing import NamedTuple
 
 import pygame
 
@@ -80,6 +82,65 @@ BORDER_WIDTH = 4
 _SQRT3 = math.sqrt(3)
 
 
+# --- Gradient theme -------------------------------------------------------
+
+class GradientTheme(NamedTuple):
+    """Two-color per-row gradient for default cell backgrounds.
+
+    Mirrors the iOS ``cellBackgroundColor`` logic: a subtle row-based lerp
+    from a slightly-tinted ``base`` at the top row back to ``base`` at the
+    bottom.  When ``accent`` is set the top-row tint is
+    ``lerp(base, accent, 0.17)``; when it's ``None`` the tint is
+    ``lerp(base, white, 0.9)`` (the existing plain near-white look).
+    """
+    base: tuple[int, int, int]
+    accent: tuple[int, int, int] | None
+
+
+# Ported from CellColors.defaultBackgroundColors in the iOS reference.
+_DEFAULT_BG_COLORS: tuple[tuple[int, int, int], ...] = (
+    (200, 235, 215),   # mint
+    (255, 215, 200),   # peach
+    (255, 245, 230),   # offWhite
+    (214, 236, 243),   # lighterSky
+    (250, 249, 251),   # barelyLavenderMostlyWhite
+    (169, 220, 237),   # lighterSkyDarker
+    (224, 215, 234),   # barelyLavenderMostlyWhiteDarker
+    (156, 228, 187),   # mintDarker
+    (255, 178, 149),   # peachDarker
+    (250, 218, 221),   # softPastelPinkLight
+    (255, 250, 205),   # softPastelYellowLight
+    (255, 218, 185),   # softPastelYellowishPink
+    (215, 189, 226),   # softPastelPurplishBlueLavender
+)
+
+# SwiftUI named colors used as optional accent tint (ported from ContentView.swift).
+_ACCENT_COLORS: tuple[tuple[int, int, int], ...] = (
+    (255, 192, 203),   # .pink
+    (128, 128, 128),   # .gray
+    (255, 213, 0),     # .yellow
+    (0, 122, 255),     # .blue
+    (128, 0, 128),     # .purple
+    (255, 149, 0),     # .orange
+)
+
+
+def generate_gradient(
+    prev_base: tuple[int, int, int] | None = None,
+) -> GradientTheme:
+    """Return a randomly-chosen gradient theme for a new maze.
+
+    Matches the iOS app: a fresh base color (excluding the previous one
+    to avoid visual repetition) and a 50% chance of an accent tint.
+    """
+    choices = [c for c in _DEFAULT_BG_COLORS if c != prev_base]
+    if not choices:
+        choices = list(_DEFAULT_BG_COLORS)
+    base = random.choice(choices)
+    accent = random.choice(_ACCENT_COLORS) if random.random() < 0.5 else None
+    return GradientTheme(base=base, accent=accent)
+
+
 def _interp(c1: tuple[int, int, int], c2: tuple[int, int, int], factor: float) -> tuple[int, int, int]:
     return (
         int(round(c1[0] + factor * (c2[0] - c1[0]))),
@@ -95,12 +156,26 @@ def _heatmap_color(distance: int, max_distance: int, palette) -> tuple[int, int,
     return palette[idx]
 
 
-def _default_cell_color(y: int, total_rows: int) -> tuple[int, int, int]:
-    """Subtle top-to-bottom gradient (near-white → off-white)."""
+def _default_cell_color(
+    y: int,
+    total_rows: int,
+    gradient: GradientTheme | None = None,
+) -> tuple[int, int, int]:
+    """Row-based gradient for plain (non-heatmap) cell backgrounds.
+
+    With a ``GradientTheme``: mirrors iOS ``cellBackgroundColor`` — lerp the
+    base toward the accent (factor 0.17) to form the top-row color, then
+    lerp back to base at the bottom row.  Without one: falls back to the
+    original near-white → off-white sweep.
+    """
+    base = gradient.base if gradient is not None else OFF_WHITE
     if total_rows <= 1:
-        return OFF_WHITE
-    start = _interp(OFF_WHITE, (255, 255, 255), 0.9)
-    return _interp(start, OFF_WHITE, y / (total_rows - 1))
+        return base
+    if gradient is not None and gradient.accent is not None:
+        top = _interp(base, gradient.accent, 0.17)
+    else:
+        top = _interp(base, (255, 255, 255), 0.9)
+    return _interp(top, base, y / (total_rows - 1))
 
 
 def cell_color(
@@ -110,6 +185,7 @@ def cell_color(
     show_heatmap: bool,
     show_solution: bool,
     palette,
+    gradient: GradientTheme | None = None,
 ) -> tuple[int, int, int]:
     """Decision chain for a cell's fill color.
 
@@ -127,7 +203,7 @@ def cell_color(
         return SOLUTION_COLOR
     if show_heatmap and max_distance > 0:
         return _heatmap_color(cell.distance, max_distance, palette)
-    return _default_cell_color(cell.coord.y, total_rows)
+    return _default_cell_color(cell.coord.y, total_rows, gradient)
 
 
 # --- Orthogonal helpers ---------------------------------------------------
@@ -177,6 +253,10 @@ class OrthogonalRenderer:
         self.palette = palette
         self.wall_width = max(1, cell_size // 6)
         self._marker_font = pygame.font.SysFont(None, max(14, int(cell_size * 0.9)))
+        self.gradient: GradientTheme | None = None
+
+    def set_gradient(self, gradient: GradientTheme | None) -> None:
+        self.gradient = gradient
 
     def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool) -> None:
         if not cells:
@@ -191,7 +271,8 @@ class OrthogonalRenderer:
             total_rows * self.cell_size,
         )
 
-        pygame.draw.rect(self.surface, OFF_WHITE, rect)
+        bg = self.gradient.base if self.gradient is not None else OFF_WHITE
+        pygame.draw.rect(self.surface, bg, rect)
         for cell in cells:
             self._draw_cell(cell, max_distance, total_rows, show_heatmap, show_solution)
         pygame.draw.rect(self.surface, BORDER_COLOR, rect, BORDER_WIDTH)
@@ -236,7 +317,7 @@ class OrthogonalRenderer:
         rect = self._cell_rect(cell.coord.x, cell.coord.y)
         pygame.draw.rect(
             self.surface,
-            cell_color(cell, max_distance, total_rows, show_heatmap, show_solution, self.palette),
+            cell_color(cell, max_distance, total_rows, show_heatmap, show_solution, self.palette, self.gradient),
             rect,
         )
 
@@ -457,6 +538,10 @@ class SigmaRenderer:
         denom = 6 if cell_size >= 18 else 7
         self.wall_width = max(1, cell_size // denom)
         self._marker_font = pygame.font.SysFont(None, max(14, int(cell_size * 0.9)))
+        self.gradient: GradientTheme | None = None
+
+    def set_gradient(self, gradient: GradientTheme | None) -> None:
+        self.gradient = gradient
 
     def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool) -> None:
         if not cells:
@@ -472,7 +557,8 @@ class SigmaRenderer:
         linked_pairs = build_sigma_linked_pairs(cells, by_coord)
 
         bbox = self.maze_rect(cells)
-        pygame.draw.rect(self.surface, OFF_WHITE, bbox)
+        bg = self.gradient.base if self.gradient is not None else OFF_WHITE
+        pygame.draw.rect(self.surface, bg, bbox)
 
         for cell in cells:
             self._draw_cell(
@@ -562,7 +648,7 @@ class SigmaRenderer:
         polygon = self._cell_polygon(q, r)
         pygame.draw.polygon(
             self.surface,
-            cell_color(cell, max_distance, total_rows, show_heatmap, show_solution, self.palette),
+            cell_color(cell, max_distance, total_rows, show_heatmap, show_solution, self.palette, self.gradient),
             polygon,
         )
 
@@ -667,6 +753,7 @@ Renderer = OrthogonalRenderer
 
 
 __all__ = [
+    "GradientTheme",
     "HEATMAP_BELIZE_HOLE",
     "OFF_WHITE",
     "ORTHO_OFFSETS",
@@ -675,6 +762,7 @@ __all__ = [
     "SigmaRenderer",
     "build_sigma_linked_pairs",
     "cell_color",
+    "generate_gradient",
     "hex_candidate_deltas",
     "hex_offset_delta",
     "make_renderer",

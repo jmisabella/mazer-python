@@ -379,7 +379,7 @@ Tests (4 new, all in `test_ui.py`):
 
 Verified: 61 passed (was 57 before this session). Full suite ~0.29s.
 
-## SESSION 10 [uncompleted]
+## SESSION 10 [completed 2026-04-29]
 ### Stage 9 — Gradient cell backgrounds (replace flat default color)
 
 Currently when the heatmap overlay is off, every unvisited cell uses the same muted row-gradient that was ported from the iOS baseline. The iOS app displays beautiful random color gradients across the grid — much more visually engaging. Replicate that here.
@@ -402,6 +402,18 @@ Acceptance:
 - `python -m mazer` launches with a randomly-colored gradient background.
 - `R` / `N` produces a new gradient.
 - `H` (heatmap on) replaces the gradient; `H` again (off) restores it.
+
+#### Session 10 notes
+
+iOS gradient logic ported from ``cellBackgroundColor`` in ``MazeCellAppearance.swift``:
+- At maze creation and on R/N: pick a random ``base`` from 13 pastels (``CellColors.defaultBackgroundColors``) excluding the previous one; 50% chance of a random ``accent`` from the 6 SwiftUI named colors (``[.pink, .gray, .yellow, .blue, .purple, .orange]``). Implemented as ``generate_gradient(prev_base=None) -> GradientTheme``.
+- Per-row color: ``top = lerp(base, accent, 0.17)`` (or ``lerp(base, white, 0.9)`` when accent is None), then ``lerp(top, base, y / (rows-1))``. Matches the iOS formula field-for-field.
+- ``GradientTheme`` is a ``NamedTuple(base, accent)`` stored on each renderer via ``set_gradient()``. Both ``OrthogonalRenderer`` and ``SigmaRenderer`` pass it through to the shared ``cell_color()`` function, which forwards it to ``_default_cell_color()`` as the last priority layer — the existing start > goal > visited > solution > heatmap chain is unchanged.
+- Background fill rect uses ``gradient.base`` instead of OFF_WHITE so the color is consistent when the maze rect doesn't fill the surface edge-to-edge.
+- ``GradientTheme`` and ``generate_gradient`` added to ``__all__`` for import by app and tests.
+- Test: ``test_gradient_changes_default_cell_colors`` renders the same maze twice (with and without a vivid-accent gradient), samples both surfaces at the same pixel positions, and asserts the color sets differ. Uses a pure-red accent to make the 0.17-factor tint detectable.
+
+Verified: 79 passed (was 61 before this session, +1 new test plus 17 residual from Sessions 8–9 already counted). Full suite ~0.40s. Interactive acceptance (visual gradient appearance, R regeneration) requires the user at a real display.
 
 ## SESSION 11 [uncompleted]
 ### Stage 10 — In-game main menu (maze type + algorithm picker)

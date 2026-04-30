@@ -395,6 +395,44 @@ def test_drag_begin_fires_no_move() -> None:
     assert drag.active
 
 
+def test_gradient_changes_default_cell_colors() -> None:
+    """Rendering with a gradient produces different background colors than plain off-white.
+
+    We use a saturated accent (pure red) so the tint is unambiguous even at
+    the low 0.17 factor. The test checks that at least one cell row differs
+    from the OFF_WHITE fallback — not that every cell is different, since
+    the start/goal/visited priority overrides the gradient on some cells.
+    """
+    from mazer.ui.renderer import GradientTheme, OFF_WHITE, OrthogonalRenderer
+
+    surface_plain = pygame.Surface((200, 200))
+    surface_grad = pygame.Surface((200, 200))
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=4, height=4,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(3, 3),
+    )
+    with Maze(request) as m:
+        cells = m.cells()
+        plain = OrthogonalRenderer(surface_plain, cell_size=30)
+        plain.draw(cells, show_heatmap=False, show_solution=False)
+
+        # A vivid accent to make the gradient detectable even at factor 0.17.
+        accent = (220, 0, 0)
+        grad_theme = GradientTheme(base=(200, 235, 215), accent=accent)
+        grad_renderer = OrthogonalRenderer(surface_grad, cell_size=30)
+        grad_renderer.set_gradient(grad_theme)
+        grad_renderer.draw(cells, show_heatmap=False, show_solution=False)
+
+    # Sample the surfaces at the same interior pixels. At least some must differ.
+    w, h = surface_plain.get_size()
+    plain_colors = {surface_plain.get_at((x, y))[:3] for y in range(5, h, 30) for x in range(5, w, 30)}
+    grad_colors = {surface_grad.get_at((x, y))[:3] for y in range(5, h, 30) for x in range(5, w, 30)}
+    assert plain_colors != grad_colors, "gradient render should produce different colors from plain off-white"
+
+
 def test_sigma_direction_lookup_returns_linked_name() -> None:
     """For every direction in a cell's ``linked`` set, the lookup recovers it.
 

@@ -128,6 +128,36 @@ _HUD_HINT_BY_TYPE: dict[MazeType, str] = {
 }
 
 
+# Adjacent directions (±45° on the 8-direction wheel) to try when the
+# primary direction is walled off.  Gives wall-sliding / auto-steering:
+# rather than stopping dead, the player flows around corners toward the
+# nearest open passage.  The Rust make_move fallback then applies its own
+# per-type sub-fallback inside each attempt.
+_SLIDE_ALTS: dict[Direction, tuple[Direction, Direction]] = {
+    Direction.UP:          (Direction.UPPER_LEFT,  Direction.UPPER_RIGHT),
+    Direction.UPPER_RIGHT: (Direction.UP,          Direction.RIGHT),
+    Direction.RIGHT:       (Direction.UPPER_RIGHT, Direction.LOWER_RIGHT),
+    Direction.LOWER_RIGHT: (Direction.RIGHT,       Direction.DOWN),
+    Direction.DOWN:        (Direction.LOWER_RIGHT, Direction.LOWER_LEFT),
+    Direction.LOWER_LEFT:  (Direction.DOWN,        Direction.LEFT),
+    Direction.LEFT:        (Direction.LOWER_LEFT,  Direction.UPPER_LEFT),
+    Direction.UPPER_LEFT:  (Direction.LEFT,        Direction.UP),
+}
+
+
+def _move_with_slide(maze, direction: Direction) -> bool:
+    """Fire *direction*; if blocked, try the two nearest slide alternatives.
+
+    Returns True if any attempt moved the player.
+    """
+    if maze.move(direction):
+        return True
+    for alt in _SLIDE_ALTS.get(direction, ()):
+        if maze.move(alt):
+            return True
+    return False
+
+
 def _delta_horizontal(direction: Direction, cells: list) -> Direction:
     """Map LEFT/RIGHT to the orientation-correct diagonal for the active delta cell.
 
@@ -575,12 +605,12 @@ def main(argv: list[str] | None = None) -> None:
                                 and direction in (Direction.LEFT, Direction.RIGHT)
                             ):
                                 direction = _delta_horizontal(direction, maze.cells())
-                            maze.move(direction)
+                            _move_with_slide(maze, direction)
                             held_arrows = [k for k in ARROW_KEYS if keys[k]]
                             if len(held_arrows) > 1:
                                 arrows_consumed.update(held_arrows)
                     elif event.key in key_map:
-                        maze.move(key_map[event.key])
+                        _move_with_slide(maze, key_map[event.key])
                 elif event.type == pygame.KEYUP:
                     keys_held.discard(event.key)
                     if event.key in ARROW_KEYS:

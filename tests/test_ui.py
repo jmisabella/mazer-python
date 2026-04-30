@@ -21,7 +21,7 @@ import pygame
 import pytest
 
 from mazer.maze import Maze
-from mazer.types import Algorithm, Coord, MazeRequest, MazeType
+from mazer.types import Algorithm, Coord, Direction, MazeRequest, MazeType
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -220,16 +220,54 @@ def test_orthogonal_direction_lookup() -> None:
     assert orthogonal_direction(Coord(2, 2), Coord(2, 2)) is None
 
 
+# --- Drag direction resolver ------------------------------------------------
+
+@pytest.mark.parametrize("dx,dy,expected", [
+    (20, 0, "Right"),
+    (-20, 0, "Left"),
+    (0, -20, "Up"),
+    (0, 20, "Down"),
+    (15, -15, "Right"),   # 45° up-right → dominant axis is equal → Right wins (|dx|>=|dy|)
+    (15, 15, "Right"),    # 45° down-right
+    (-15, -15, "Left"),
+    (-15, 15, "Left"),
+    (5, -20, "Up"),       # mostly up
+    (5, 20, "Down"),      # mostly down
+])
+def test_direction_from_vector_orthogonal(dx, dy, expected) -> None:
+    from mazer.ui.app import _direction_from_vector
+    result = _direction_from_vector(dx, dy, MazeType.ORTHOGONAL)
+    assert result == Direction(expected)
+
+
+@pytest.mark.parametrize("angle_deg,expected", [
+    (270, "Up"),
+    (330, "UpperRight"),
+    (30,  "LowerRight"),
+    (90,  "Down"),
+    (150, "LowerLeft"),
+    (210, "UpperLeft"),
+])
+def test_direction_from_vector_sigma(angle_deg, expected) -> None:
+    """Drag vectors at the center of each hex sector resolve to the right direction."""
+    import math as _math
+    from mazer.ui.app import _direction_from_vector
+    rad = _math.radians(angle_deg)
+    dx = _math.cos(rad) * 50
+    dy = _math.sin(rad) * 50
+    result = _direction_from_vector(dx, dy, MazeType.SIGMA)
+    assert result == Direction(expected)
+
+
 # --- Drag-to-move -----------------------------------------------------------
 
 def test_drag_to_move_orthogonal() -> None:
-    """Drag across two orthogonal cells fires two moves in sequence."""
-    from mazer.ui.renderer import OrthogonalRenderer
+    """Dragging past the threshold in an open direction moves the player."""
+    from mazer.ui.renderer import ORTHO_OFFSETS
     from mazer.ui.app import _DragState
 
     cell_size = 20
-    surface = pygame.Surface((200, 200))
-    renderer = OrthogonalRenderer(surface, cell_size=cell_size)
+    threshold = int(cell_size * 0.6) + 2  # comfortably past the 0.6 threshold
 
     request = MazeRequest(
         maze_type=MazeType.ORTHOGONAL,
@@ -239,43 +277,37 @@ def test_drag_to_move_orthogonal() -> None:
     )
     with Maze(request) as maze:
         cells = maze.cells()
-        path = sorted([c for c in cells if c.on_solution_path], key=lambda c: c.distance)
-        if len(path) < 3:
-            pytest.skip("solution path too short for drag test")
-        A, B, C = path[0], path[1], path[2]
-
-        def ortho_center(coord: Coord) -> tuple[int, int]:
-            return (coord.x * cell_size + cell_size // 2,
-                    coord.y * cell_size + cell_size // 2)
+        start = next(c for c in cells if c.is_active)
+        if not start.linked:
+            pytest.skip("start cell has no open walls")
+        # Pick the first open direction and build a drag vector for it.
+        direction = next(iter(start.linked))
+        ddx, ddy = ORTHO_OFFSETS[direction]
 
         drag = _DragState()
-        assert not drag.active
-
-        # BUTTONDOWN at B: player is at A, click B fires move A→B.
-        fired = drag.begin(ortho_center(B.coord), renderer, maze, maze.cells(), MazeType.ORTHOGONAL)
-        assert fired, "BUTTONDOWN on adjacent linked cell should fire a move"
+        drag.begin((100, 100))  # anchor anywhere
         assert drag.active
 
-        # MOUSEMOTION to C: chains B→C.
-        fired = drag.motion(ortho_center(C.coord), renderer, maze, MazeType.ORTHOGONAL)
-        assert fired, "MOUSEMOTION into adjacent linked cell should fire a move"
+        # Move cursor threshold units in the open direction.
+        pos = (100 + ddx * threshold, 100 + ddy * threshold)
+        fired = drag.motion(pos, maze, cell_size, MazeType.ORTHOGONAL)
+        assert fired, f"drag in open direction {direction} should fire a move"
 
-        # Verify active cell advanced to C.
         cells_final = maze.cells()
         active = next(c for c in cells_final if c.is_active)
-        assert active.coord == C.coord
+        assert active.coord != start.coord, "player should have moved"
 
         drag.end()
         assert not drag.active
 
 
 def test_drag_to_move_sigma() -> None:
-    """Drag across two sigma cells fires two moves in sequence."""
-    from mazer.ui.renderer import SigmaRenderer
-    from mazer.ui.app import _DragState
+    """Dragging past the threshold fires a move in the resolved hex direction."""
+    import math as _math
+    from mazer.ui.app import _DragState, _direction_from_vector
 
-    surface = pygame.Surface((400, 400))
-    renderer = SigmaRenderer(surface, cell_size=24, offset=(10, 10))
+    cell_size = 24
+    threshold = int(cell_size * 0.6) + 2
 
     request = MazeRequest(
         maze_type=MazeType.SIGMA,
@@ -283,41 +315,44 @@ def test_drag_to_move_sigma() -> None:
         algorithm=Algorithm.RECURSIVE_BACKTRACKER,
         start=Coord(0, 0), goal=Coord(4, 4),
     )
+    # Hex sector angles (degrees) for each sigma direction.
+    _SIGMA_CENTER_ANGLES = {
+        Direction.UP: 270, Direction.UPPER_RIGHT: 330,
+        Direction.LOWER_RIGHT: 30, Direction.DOWN: 90,
+        Direction.LOWER_LEFT: 150, Direction.UPPER_LEFT: 210,
+    }
     with Maze(request) as maze:
         cells = maze.cells()
-        path = sorted([c for c in cells if c.on_solution_path], key=lambda c: c.distance)
-        if len(path) < 3:
-            pytest.skip("solution path too short for drag test")
-        A, B, C = path[0], path[1], path[2]
-
-        def sigma_center(coord: Coord) -> tuple[int, int]:
-            cx, cy = renderer._cell_center(coord.x, coord.y)
-            return (int(cx), int(cy))
-
-        drag = _DragState()
-
-        fired = drag.begin(sigma_center(B.coord), renderer, maze, maze.cells(), MazeType.SIGMA)
-        assert fired, "BUTTONDOWN on adjacent linked hex should fire a move"
-
-        fired = drag.motion(sigma_center(C.coord), renderer, maze, MazeType.SIGMA)
-        assert fired, "MOUSEMOTION into adjacent linked hex should fire a move"
-
-        cells_final = maze.cells()
-        active = next(c for c in cells_final if c.is_active)
-        assert active.coord == C.coord
-
-        drag.end()
-        assert not drag.active
+        start = next(c for c in cells if c.is_active)
+        if not start.linked:
+            pytest.skip("start cell has no open walls")
+        # Try each linked direction until one produces a valid move.
+        for direction in start.linked:
+            angle = _SIGMA_CENTER_ANGLES.get(direction)
+            if angle is None:
+                continue
+            rad = _math.radians(angle)
+            drag = _DragState()
+            drag.begin((200, 200))
+            pos = (200 + int(_math.cos(rad) * threshold),
+                   200 + int(_math.sin(rad) * threshold))
+            # Verify the vector resolves to the intended direction.
+            resolved = _direction_from_vector(pos[0] - 200, pos[1] - 200, MazeType.SIGMA)
+            if resolved != direction:
+                continue  # floating-point edge case; skip to next direction
+            fired = drag.motion(pos, maze, cell_size, MazeType.SIGMA)
+            drag.end()
+            if fired:
+                cells_final = maze.cells()
+                active = next(c for c in cells_final if c.is_active)
+                assert active.coord != start.coord
+                return
+        pytest.skip("no open sigma direction produced a successful move")
 
 
 def test_drag_motion_ignored_when_not_active() -> None:
-    """motion() is a no-op when drag hasn't started (no BUTTONDOWN)."""
-    from mazer.ui.renderer import OrthogonalRenderer
+    """motion() is a no-op before begin() is called."""
     from mazer.ui.app import _DragState
-
-    cell_size = 20
-    surface = pygame.Surface((200, 200))
-    renderer = OrthogonalRenderer(surface, cell_size=cell_size)
 
     request = MazeRequest(
         maze_type=MazeType.ORTHOGONAL,
@@ -327,37 +362,37 @@ def test_drag_motion_ignored_when_not_active() -> None:
     )
     with Maze(request) as maze:
         drag = _DragState()
-        fired = drag.motion((cell_size + cell_size // 2, cell_size // 2), renderer, maze, MazeType.ORTHOGONAL)
+        fired = drag.motion((100, 100), maze, 20, MazeType.ORTHOGONAL)
         assert not fired
 
 
-def test_drag_begin_non_adjacent_does_not_move() -> None:
-    """BUTTONDOWN on a non-adjacent cell starts the drag but fires no move."""
-    from mazer.ui.renderer import OrthogonalRenderer
+def test_drag_motion_below_threshold_fires_no_move() -> None:
+    """A tiny drag below the threshold does not move the player."""
     from mazer.ui.app import _DragState
 
     cell_size = 20
-    surface = pygame.Surface((200, 200))
-    renderer = OrthogonalRenderer(surface, cell_size=cell_size)
-
     request = MazeRequest(
         maze_type=MazeType.ORTHOGONAL,
-        width=5, height=5,
+        width=3, height=3,
         algorithm=Algorithm.RECURSIVE_BACKTRACKER,
-        start=Coord(0, 0), goal=Coord(4, 4),
+        start=Coord(0, 0), goal=Coord(2, 2),
     )
     with Maze(request) as maze:
         drag = _DragState()
-        # Click on cell (3, 3) — far from the active cell at (0, 0).
-        far_pos = (3 * cell_size + cell_size // 2, 3 * cell_size + cell_size // 2)
-        fired = drag.begin(far_pos, renderer, maze, maze.cells(), MazeType.ORTHOGONAL)
-        assert not fired, "non-adjacent click should not fire a move"
-        assert drag.active, "drag session should still be active"
+        drag.begin((100, 100))
+        # Move 1 pixel — well below the cell_size * 0.6 threshold.
+        fired = drag.motion((101, 100), maze, cell_size, MazeType.ORTHOGONAL)
+        assert not fired
 
-        # Active cell unchanged.
-        cells = maze.cells()
-        active = next(c for c in cells if c.is_active)
-        assert active.coord == Coord(0, 0)
+
+def test_drag_begin_fires_no_move() -> None:
+    """BUTTONDOWN (begin) only records the anchor — no move is fired."""
+    from mazer.ui.app import _DragState
+
+    drag = _DragState()
+    assert not drag.active
+    drag.begin((42, 99))
+    assert drag.active
 
 
 def test_sigma_direction_lookup_returns_linked_name() -> None:

@@ -49,6 +49,7 @@ state. If a key seems "not to move you", check the dots.
 from __future__ import annotations
 
 import argparse
+import math
 
 import pygame
 
@@ -57,8 +58,6 @@ from mazer.types import Algorithm, Coord, Direction, MazeRequest, MazeType
 from mazer.ui.renderer import (
     OFF_WHITE,
     make_renderer,
-    orthogonal_direction,
-    sigma_direction,
 )
 
 
@@ -136,86 +135,86 @@ def _resolve_chord(up: bool, down: bool, left: bool, right: bool) -> Direction |
     return None
 
 
-def _direction_for_click(
-    active: Cell, target_coord: Coord, cells: list[Cell], maze_type: MazeType
-) -> Direction | None:
-    """Look up the direction that connects active → clicked, if linked.
+# Sigma: six 60° sectors mapped to hex directions, indexed by
+# ``int((angle_degrees + 30) % 360 / 60)``.  Angle 0° = rightward (screen
+# x+), increasing clockwise (y-down screen coords).  Centers per sector:
+# 330° UPPER_RIGHT, 30° LOWER_RIGHT, 90° DOWN, 150° LOWER_LEFT,
+# 210° UPPER_LEFT, 270° UP.
+_SIGMA_SECTOR_DIRECTIONS = (
+    Direction.UPPER_RIGHT,  # sector 0: 300°–360° / 0°–30°
+    Direction.LOWER_RIGHT,  # sector 1: 30°–90°
+    Direction.DOWN,          # sector 2: 90°–150°
+    Direction.LOWER_LEFT,   # sector 3: 150°–210°
+    Direction.UPPER_LEFT,   # sector 4: 210°–270°
+    Direction.UP,            # sector 5: 270°–330°
+)
 
-    Orthogonal: trivial 4-adjacent delta lookup.
-    Sigma: read the direction name from ``active.linked`` so we send the
-    *exact* name the FFI used, sidestepping the boundary-clamp ambiguity.
-    Returns ``None`` if the click was on a non-adjacent or non-linked cell.
+
+def _direction_from_vector(dx: float, dy: float, maze_type: MazeType) -> Direction | None:
+    """Resolve a drag vector to a Direction based on maze type.
+
+    Orthogonal: dominant-axis (4-way).
+    Sigma: angle mapped to the nearest of 6 hex directions.
+    Returns None for zero-length vectors or unimplemented maze types.
     """
-    if target_coord == active.coord:
+    if dx == 0 and dy == 0:
         return None
     if maze_type == MazeType.ORTHOGONAL:
-        direction = orthogonal_direction(active.coord, target_coord)
-        if direction is None or direction not in active.linked:
-            return None
-        return direction
+        if abs(dx) >= abs(dy):
+            return Direction.RIGHT if dx > 0 else Direction.LEFT
+        return Direction.DOWN if dy > 0 else Direction.UP
     if maze_type == MazeType.SIGMA:
-        return sigma_direction(active, target_coord, cells)
+        angle = (math.degrees(math.atan2(dy, dx)) + 360) % 360
+        sector = int((angle + 30) % 360 / 60)
+        return _SIGMA_SECTOR_DIRECTIONS[sector]
     return None
 
+
 class _DragState:
-    """Mouse drag state machine for continuous multi-cell navigation.
+    """Swipe-to-move state machine.
 
-    BUTTONDOWN → ``begin`` (fires the first move if on an adjacent linked cell
-    and starts the drag session). MOUSEMOTION → ``motion`` (fires a move each
-    time the cursor enters a new adjacent linked cell). BUTTONUP → ``end``.
-
-    Single tap is the degenerate case: BUTTONDOWN fires the move, no MOTION
-    event crosses a new cell boundary before BUTTONUP ends the session.
+    Click anywhere on the maze and hold.  As the cursor moves, the drag
+    vector from the last-fired position is resolved to a direction; when
+    it exceeds the threshold (``cell_size * 0.6``) a move fires and the
+    anchor resets to the current position so the next move requires
+    another threshold-worth of drag.  Works like a joystick — direction
+    of travel determines movement, not which cell the cursor is on.
     """
 
     def __init__(self) -> None:
         self.active = False
+        self._origin: tuple[int, int] | None = None
 
-    def begin(
-        self,
-        pos: tuple[int, int],
-        renderer,
-        maze,
-        cells: list,
-        maze_type: MazeType,
-    ) -> bool:
-        """Start a drag session. Returns True if a move was fired."""
+    def begin(self, pos: tuple[int, int]) -> None:
+        """Start a drag session, recording the cursor anchor point."""
         self.active = True
-        target = renderer.cell_at(pos, cells)
-        if target is None:
-            return False
-        active_cell = next((c for c in cells if c.is_active), None)
-        if active_cell is None:
-            return False
-        direction = _direction_for_click(active_cell, target, cells, maze_type)
-        if direction is not None:
-            return maze.move(direction)
-        return False
+        self._origin = pos
 
     def motion(
         self,
         pos: tuple[int, int],
-        renderer,
         maze,
+        cell_size: int,
         maze_type: MazeType,
     ) -> bool:
-        """Handle MOUSEMOTION. Fires a move if the cursor entered a new adjacent linked cell."""
-        if not self.active:
+        """Handle MOUSEMOTION. Fires a move when the accumulated drag exceeds the threshold."""
+        if not self.active or self._origin is None:
             return False
-        cells = maze.cells()
-        active_cell = next((c for c in cells if c.is_active), None)
-        if active_cell is None:
+        ox, oy = self._origin
+        dx = pos[0] - ox
+        dy = pos[1] - oy
+        if math.hypot(dx, dy) < cell_size * 0.6:
             return False
-        target = renderer.cell_at(pos, cells)
-        if target is None or target == active_cell.coord:
+        direction = _direction_from_vector(dx, dy, maze_type)
+        if direction is None:
             return False
-        direction = _direction_for_click(active_cell, target, cells, maze_type)
-        if direction is not None:
-            return maze.move(direction)
-        return False
+        fired = maze.move(direction)
+        self._origin = pos
+        return fired
 
     def end(self) -> None:
         self.active = False
+        self._origin = None
 
 
 HUD_BG = OFF_WHITE
@@ -272,10 +271,6 @@ def _window_size(request: MazeRequest, cell_size: int) -> tuple[int, int]:
     if request.maze_type == MazeType.ORTHOGONAL:
         return (request.width * cell_size, request.height * cell_size + HUD_HEIGHT)
     if request.maze_type == MazeType.SIGMA:
-        # Pull the same math the renderer uses; importing inline avoids a
-        # top-level dependency on math just for window sizing.
-        import math
-
         hex_height = math.sqrt(3) * cell_size
         w = int(round(cell_size * (1.5 * request.width + 0.5)))
         h = int(round(hex_height * (request.height + 0.5))) + HUD_HEIGHT
@@ -390,9 +385,9 @@ def main(argv: list[str] | None = None) -> None:
                 elif event.type == pygame.KEYUP and event.key in ARROW_KEYS:
                     arrows_consumed.discard(event.key)
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    drag.begin(event.pos, renderer, maze, maze.cells(), request.maze_type)
+                    drag.begin(event.pos)
                 elif event.type == pygame.MOUSEMOTION:
-                    drag.motion(event.pos, renderer, maze, request.maze_type)
+                    drag.motion(event.pos, maze, cell_size, request.maze_type)
                 elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                     drag.end()
 

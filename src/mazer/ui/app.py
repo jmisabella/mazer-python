@@ -122,6 +122,22 @@ SIGMA_KEYS: dict[int, Direction] = {
 # current cell orientation (Normal vs Inverted).
 DELTA_KEYS: dict[int, Direction] = SIGMA_KEYS
 
+# Valid move directions for Rhombic — all diagonal.
+_RHOMBIC_VALID_DIRECTIONS = frozenset({
+    Direction.UPPER_RIGHT, Direction.LOWER_RIGHT,
+    Direction.LOWER_LEFT, Direction.UPPER_LEFT,
+})
+
+# Single-arrow cardinal → nearest Rhombic diagonal, consistent with the
+# 90°-sector drag mapping: ↑=270°→UpperRight, →=0°→LowerRight,
+# ↓=90°→LowerLeft, ←=180°→UpperLeft.
+_RHOMBIC_CARDINAL_TO_DIAGONAL: dict[Direction, Direction] = {
+    Direction.UP:    Direction.UPPER_RIGHT,
+    Direction.RIGHT: Direction.LOWER_RIGHT,
+    Direction.DOWN:  Direction.LOWER_LEFT,
+    Direction.LEFT:  Direction.UPPER_LEFT,
+}
+
 # Rhombic has only four diagonal directions. No W/X (UP/DOWN cardinals)
 # because Rhombic cells don't connect cardinally; Q/E/Z/C cover all moves.
 # Arrow chords (↑+→ etc.) still work and produce the four diagonals.
@@ -685,6 +701,17 @@ def main(argv: list[str] | None = None) -> None:
                             keys[pygame.K_RIGHT],
                         )
                         if direction is not None:
+                            # Rhombic: open_walls stores diagonal names directly.
+                            # Single-arrow cardinals (UP/DOWN/LEFT/RIGHT) don't
+                            # match open_walls — remap to the nearest diagonal so
+                            # ↑ → UpperRight, → → LowerRight, ↓ → LowerLeft,
+                            # ← → UpperLeft.  Diagonal chords (↑+→ etc.) are
+                            # already valid and pass through unchanged.
+                            if (
+                                request.maze_type == MazeType.RHOMBIC
+                                and direction not in _RHOMBIC_VALID_DIRECTIONS
+                            ):
+                                direction = _RHOMBIC_CARDINAL_TO_DIAGONAL[direction]
                             # Delta mazes have no native Left/Right neighbors.
                             # Map the cardinal to the exact horizontal diagonal
                             # for the active cell's orientation so hold-to-move

@@ -1,3 +1,21 @@
+.planning/referenced_resources/*
+
+.claude/*
+
+# Rust source clone target (build.sh) — anchored so it does not match src/mazer/
+/mazer/
+
+# Native build output (libmazer.{dylib,so}, mazer.h) — populated by build_rust.sh
+/native/
+
+# cffi-compiled extension and its generated C source — produced by
+# `python -m mazer._ffi_build`. Platform- and Python-version-specific;
+# regenerated on every build, not tracked in source control.
+# (The `.so` is also covered by the generic `*.so` rule below, but listing
+# explicitly here documents the artifact and survives any later loosening
+# of `*.so`.)
+/src/mazer/_mazer_cffi*
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

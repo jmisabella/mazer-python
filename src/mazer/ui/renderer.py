@@ -7,7 +7,9 @@ and ``Layout/MazeCellAppearance.swift``):
 * Wall stroke for orthogonal = ``cell_size // 12``; for sigma it's
   ``cell_size // 6`` at ``cell_size >= 18`` and ``cell_size // 7`` below;
   for delta ``cell_size / 10 * 1.15`` at ``cell_size >= 28`` else
-  ``cell_size / 12 * 1.15`` (denominators from ``wallStrokeWidth(for:cellSize:)``).
+  ``cell_size / 12 * 1.15``; for rhombic ``cell_size / 7`` at
+  ``cell_size >= 18`` else ``cell_size / 4.8``
+  (denominators from ``wallStrokeWidth(for:cellSize:)``).
 * Heatmap default is the "Belize Hole" 10-shade gradient from
   ``HeatMapPalette.swift``; index = ``min(9, distance * 10 / max_distance)``.
 * Cell background uses ``CellColors.offWhite`` (#FFF5E6) with the same
@@ -19,8 +21,8 @@ and ``Layout/MazeCellAppearance.swift``):
 Dispatch:
     All renderer classes expose ``draw(cells, show_heatmap, show_solution)``
     and ``maze_rect(cells)``. The app picks the right one for a maze via
-    :func:`make_renderer`. Orthogonal, Sigma, and Delta are implemented;
-    Rhombic and Upsilon raise ``NotImplementedError`` from the factory.
+    :func:`make_renderer`. Orthogonal, Sigma, Delta, and Rhombic are
+    implemented; Upsilon raises ``NotImplementedError`` from the factory.
 
 Hex layout (Sigma):
     Flat-top hexagons in odd-q vertical offset, ported from the iOS
@@ -47,6 +49,24 @@ Triangle layout (Delta):
     (apex down). Directions:
       Normal  — UpperLeft (left slant), UpperRight (right slant), Down (base).
       Inverted — Up (top base), LowerLeft (left slant), LowerRight (right slant).
+
+Diamond layout (Rhombic):
+    45°-rotated diamond cells, ported from ``RhombicCellView``/
+    ``RhombicMazeView``. Only cells where ``(col + row) % 2 == 0`` exist
+    (checkerboard pattern). Bounding box per diamond is ``box × box`` where
+    ``box = cell_size * sqrt(2)``; cell center in the grid is at
+    ``(col * half_diagonal, row * half_diagonal)`` where
+    ``half_diagonal = box / 2``.
+
+    Unit points (scaled by ``box``): top=(0.5,0), right=(1,0.5),
+    bottom=(0.5,1), left=(0,0.5). Directions:
+      UpperRight — top → right (vertices 0→1).
+      LowerRight — right → bottom (vertices 1→2).
+      LowerLeft  — bottom → left (vertices 2→3).
+      UpperLeft  — left → top (vertices 3→0).
+
+    Container: ``half_diagonal * max_x + box`` wide,
+    ``half_diagonal * max_y + box`` tall.
 """
 
 from __future__ import annotations
@@ -921,6 +941,203 @@ class DeltaRenderer:
         self.surface.blit(text, text.get_rect(center=center))
 
 
+# --- Rhombic (diamond) ----------------------------------------------------
+
+# Coord offsets for the four diagonal Rhombic directions.
+# The Rust assigns these via assign_neighbors_rhombic; no boundary-clamp
+# ambiguity (unlike Sigma) — each direction maps to exactly one delta.
+RHOMBIC_OFFSETS: dict[Direction, tuple[int, int]] = {
+    Direction.UPPER_RIGHT: (1, -1),
+    Direction.LOWER_RIGHT: (1, 1),
+    Direction.LOWER_LEFT: (-1, 1),
+    Direction.UPPER_LEFT: (-1, -1),
+}
+
+
+def rhombic_direction(active: Cell, target: Coord) -> Direction | None:
+    """Find the direction in ``active.linked`` that connects to ``target``.
+
+    Rhombic has four diagonal directions, each with an unambiguous coord
+    delta (no boundary-clamp issue).  Returns ``None`` if ``target`` is not
+    a linked neighbor of ``active``.
+    """
+    dx, dy = target.x - active.coord.x, target.y - active.coord.y
+    direction = {v: k for k, v in RHOMBIC_OFFSETS.items()}.get((dx, dy))
+    if direction is None or direction not in active.linked:
+        return None
+    return direction
+
+
+_SQRT2 = math.sqrt(2)
+
+
+class RhombicRenderer:
+    """Renders a rhombic (45°-rotated diamond) maze onto a Pygame surface.
+
+    Only cells where ``(col + row) % 2 == 0`` are rendered — the underlying
+    grid is a checkerboard pattern.  Cell (col, row) has its top vertex at
+    ``(offset_x + col * half_diagonal, offset_y + row * half_diagonal)``
+    where ``half_diagonal = cell_size * sqrt(2) / 2``.
+
+    Bounding box: ``half_diagonal * max_x + diagonal`` wide,
+    ``half_diagonal * max_y + diagonal`` tall
+    (ported from ``RhombicMazeView.containerWidth/Height``).
+    """
+
+    def __init__(
+        self,
+        surface: pygame.Surface,
+        cell_size: int,
+        offset: tuple[int, int] = (0, 0),
+        palette=HEATMAP_BELIZE_HOLE,
+    ) -> None:
+        self.surface = surface
+        self.cell_size = cell_size
+        self.offset_x, self.offset_y = offset
+        self.palette = palette
+        self.diagonal = cell_size * _SQRT2
+        self.half_diagonal = self.diagonal / 2
+        # Wall stroke from iOS MazeCellAppearance.swift wallStrokeWidth(for:.rhombic)
+        denom = 7.0 if cell_size >= 18 else 4.8
+        self.wall_width = max(1, int(round(cell_size / denom)))
+        self._marker_font = pygame.font.SysFont(None, max(14, int(cell_size * 0.9)))
+        self.gradient: GradientTheme | None = None
+
+    def set_gradient(self, gradient: GradientTheme | None) -> None:
+        self.gradient = gradient
+
+    def maze_rect(self, cells: list[Cell]) -> pygame.Rect:
+        valid = [c for c in cells if (c.coord.x + c.coord.y) % 2 == 0]
+        if not valid:
+            return pygame.Rect(self.offset_x, self.offset_y, 0, 0)
+        max_x = max(c.coord.x for c in valid)
+        max_y = max(c.coord.y for c in valid)
+        w = int(round(self.half_diagonal * max_x + self.diagonal))
+        h = int(round(self.half_diagonal * max_y + self.diagonal))
+        return pygame.Rect(self.offset_x, self.offset_y, w, h)
+
+    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool) -> None:
+        valid = [c for c in cells if (c.coord.x + c.coord.y) % 2 == 0]
+        if not valid:
+            return
+        max_distance = max(c.distance for c in valid)
+        total_rows = max(c.coord.y for c in valid) + 1
+        bbox = self.maze_rect(valid)
+        bg = self.gradient.base if self.gradient is not None else OFF_WHITE
+        pygame.draw.rect(self.surface, bg, bbox)
+        for cell in valid:
+            self._draw_cell(cell, max_distance, total_rows, show_heatmap, show_solution)
+        pygame.draw.rect(self.surface, BORDER_COLOR, bbox, BORDER_WIDTH)
+
+    def cell_at(self, pos: tuple[int, int], cells: list[Cell]) -> Coord | None:
+        """Pixel → grid coord. Returns ``None`` if the click missed all diamonds."""
+        valid = [c for c in cells if (c.coord.x + c.coord.y) % 2 == 0]
+        if not valid or not self.maze_rect(valid).collidepoint(pos):
+            return None
+        px, py = pos
+        best: Coord | None = None
+        best_dist_sq = float("inf")
+        for cell in valid:
+            cx, cy = self._cell_center(cell.coord.x, cell.coord.y)
+            d = (cx - px) ** 2 + (cy - py) ** 2
+            if d < best_dist_sq:
+                best_dist_sq = d
+                best = cell.coord
+        if best is None:
+            return None
+        if not _point_in_polygon((px, py), self._cell_polygon(best.x, best.y)):
+            return None
+        return best
+
+    def _cell_center(self, col: int, row: int) -> tuple[float, float]:
+        # Top vertex of the diamond is at (col*hd, row*hd); center is box/2 further.
+        x0 = self.offset_x + col * self.half_diagonal
+        y0 = self.offset_y + row * self.half_diagonal
+        return (x0 + self.diagonal / 2, y0 + self.diagonal / 2)
+
+    def _cell_polygon(self, col: int, row: int) -> list[tuple[float, float]]:
+        """Four vertices of the diamond at (col, row): top, right, bottom, left."""
+        x0 = self.offset_x + col * self.half_diagonal
+        y0 = self.offset_y + row * self.half_diagonal
+        b = self.diagonal
+        return [
+            (x0 + b / 2, y0),          # top
+            (x0 + b,     y0 + b / 2),  # right
+            (x0 + b / 2, y0 + b),      # bottom
+            (x0,         y0 + b / 2),  # left
+        ]
+
+    def _draw_cell(
+        self,
+        cell: Cell,
+        max_distance: int,
+        total_rows: int,
+        show_heatmap: bool,
+        show_solution: bool,
+    ) -> None:
+        col, row = cell.coord.x, cell.coord.y
+        polygon = self._cell_polygon(col, row)
+        pygame.draw.polygon(
+            self.surface,
+            cell_color(
+                cell, max_distance, total_rows, show_heatmap, show_solution,
+                self.palette, self.gradient,
+            ),
+            polygon,
+        )
+
+        w = self.wall_width
+        # Edges: UpperRight=0→1, LowerRight=1→2, LowerLeft=2→3, UpperLeft=3→0
+        if Direction.UPPER_RIGHT not in cell.linked:
+            pygame.draw.line(self.surface, WALL_COLOR, polygon[0], polygon[1], w)
+        if Direction.LOWER_RIGHT not in cell.linked:
+            pygame.draw.line(self.surface, WALL_COLOR, polygon[1], polygon[2], w)
+        if Direction.LOWER_LEFT not in cell.linked:
+            pygame.draw.line(self.surface, WALL_COLOR, polygon[2], polygon[3], w)
+        if Direction.UPPER_LEFT not in cell.linked:
+            pygame.draw.line(self.surface, WALL_COLOR, polygon[3], polygon[0], w)
+
+        center = self._cell_center(col, row)
+        center_int = (int(round(center[0])), int(round(center[1])))
+
+        if cell.is_active:
+            radius = max(3, self.cell_size // 3)
+            pygame.draw.circle(self.surface, ACTIVE_MARKER_COLOR, center_int, radius)
+            pygame.draw.circle(self.surface, WALL_COLOR, center_int, radius, max(1, w // 2))
+            self._draw_open_exit_dots(cell, center, polygon)
+
+    def _draw_open_exit_dots(
+        self,
+        cell: Cell,
+        center: tuple[float, float],
+        polygon: list[tuple[float, float]],
+    ) -> None:
+        cx, cy = center
+        dot_radius = max(2, self.cell_size // 12)
+        outline = max(1, dot_radius // 2)
+        # Edge midpoint per direction: same vertex-pair as wall drawing.
+        edge_midpoints = {
+            Direction.UPPER_RIGHT: ((polygon[0][0] + polygon[1][0]) / 2,
+                                    (polygon[0][1] + polygon[1][1]) / 2),
+            Direction.LOWER_RIGHT: ((polygon[1][0] + polygon[2][0]) / 2,
+                                    (polygon[1][1] + polygon[2][1]) / 2),
+            Direction.LOWER_LEFT:  ((polygon[2][0] + polygon[3][0]) / 2,
+                                    (polygon[2][1] + polygon[3][1]) / 2),
+            Direction.UPPER_LEFT:  ((polygon[3][0] + polygon[0][0]) / 2,
+                                    (polygon[3][1] + polygon[0][1]) / 2),
+        }
+        for direction, (mx, my) in edge_midpoints.items():
+            if direction not in cell.linked:
+                continue
+            pos = (cx + 0.6 * (mx - cx), cy + 0.6 * (my - cy))
+            pygame.draw.circle(self.surface, OPEN_EXIT_DOT_COLOR, pos, dot_radius)
+            pygame.draw.circle(self.surface, WALL_COLOR, pos, dot_radius, outline)
+
+    def _draw_letter(self, center: tuple[int, int], letter: str) -> None:
+        text = self._marker_font.render(letter, True, LETTER_COLOR)
+        self.surface.blit(text, text.get_rect(center=center))
+
+
 # --- Dispatch -------------------------------------------------------------
 
 
@@ -933,8 +1150,8 @@ def make_renderer(
 ):
     """Return the renderer matching a maze type. Raises for unimplemented types.
 
-    Orthogonal, Sigma, and Delta are implemented. Rhombic and Upsilon
-    raise ``NotImplementedError`` rather than silently falling back.
+    Orthogonal, Sigma, Delta, and Rhombic are implemented. Upsilon raises
+    ``NotImplementedError`` rather than silently falling back.
     """
     if maze_type == MazeType.ORTHOGONAL:
         return OrthogonalRenderer(surface, cell_size, offset=offset, palette=palette)
@@ -942,7 +1159,9 @@ def make_renderer(
         return SigmaRenderer(surface, cell_size, offset=offset, palette=palette)
     if maze_type == MazeType.DELTA:
         return DeltaRenderer(surface, cell_size, offset=offset, palette=palette)
-    raise NotImplementedError(f"No renderer implemented for {maze_type.value} (Orthogonal, Sigma, Delta supported)")
+    if maze_type == MazeType.RHOMBIC:
+        return RhombicRenderer(surface, cell_size, offset=offset, palette=palette)
+    raise NotImplementedError(f"No renderer implemented for {maze_type.value} (Orthogonal, Sigma, Delta, Rhombic supported)")
 
 
 # Back-compat: existing callers still reference ``Renderer`` for the
@@ -957,7 +1176,9 @@ __all__ = [
     "OFF_WHITE",
     "ORTHO_OFFSETS",
     "OrthogonalRenderer",
+    "RHOMBIC_OFFSETS",
     "Renderer",
+    "RhombicRenderer",
     "SigmaRenderer",
     "build_sigma_linked_pairs",
     "cell_color",
@@ -967,5 +1188,6 @@ __all__ = [
     "hex_offset_delta",
     "make_renderer",
     "orthogonal_direction",
+    "rhombic_direction",
     "sigma_direction",
 ]

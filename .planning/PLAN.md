@@ -508,7 +508,7 @@ Note: Delta uses six directions (`Up`, `UpperLeft`, `UpperRight`, `Down`, `Lower
 
 Verified: 98 passed, 0 skipped (was 92 + 1 skipped before this session — the Stage 5 placeholder skipped test is gone, likely cleared in an earlier session). Full suite ~0.35s. App smoke test under `SDL_VIDEODRIVER=dummy` with W/Q/E/Z/X/C/H/S/R keys + QUIT exits cleanly.
 
-## SESSION 13 [uncompleted]
+## SESSION 13 [completed 2026-04-30]
 ### Stage 12 — Rhombic grid rendering and play
 
 Add full support for the Rhombic maze type: rendering, key mapping, hit-testing, and integration test.
@@ -521,6 +521,38 @@ Scope:
 5. **Tests**: solver integration test + renderer smoke test + `cell_at` test.
 
 Reference: `RhombicCellView.swift`, `RhombicMazeView.swift`. Pay attention to `Cell::get_user_facing_open_walls` in the Rust (`grid.rs`) — it applies a remap for Rhombic.
+
+#### Session 13 notes
+
+**Direction remap confirmed from `cell.rs`**: The Rust internally assigns Rhombic neighbors via cardinal directions (`Up/Right/Down/Left`) but exports them user-facing as diagonals (`Up→UpperRight, Right→LowerRight, Down→LowerLeft, Left→UpperLeft`) via `get_user_facing_open_walls`. So `cell.linked` always contains diagonal-only direction names. `make_move` receives e.g. `UpperRight`, tries it (not in `open_walls` which uses cardinals), falls back to `Up` (which IS in `open_walls`), and succeeds. This is seamless to the Python layer.
+
+**No boundary-clamp ambiguity**: Unlike Sigma, Rhombic neighbor assignment (`assign_neighbors_rhombic`) uses unambiguous deltas for each direction: `UpperRight=(+1,-1), LowerRight=(+1,+1), LowerLeft=(-1,+1), UpperLeft=(-1,-1)`. Simple `rhombic_direction` helper (same pattern as `delta_direction`) is sufficient — no candidate-offset iteration needed.
+
+**Cell existence**: Only `(x+y) % 2 == 0` cells exist. The `cells()` list from the FFI includes all width×height positions but non-existent cells have zeroed-out fields. The renderer filters to valid cells internally. The integration test uses a 9×9 grid (41 valid cells); the app default is 11×11 (61 valid cells).
+
+**Geometry** from `RhombicCellView.swift`/`RhombicMazeView.swift` (ported field-for-field):
+- `box = cell_size * sqrt(2)`, `half_diagonal = box / 2`
+- Diamond vertices: top `(cx, y0)`, right `(x0+box, cy)`, bottom `(cx, y0+box)`, left `(x0, cy)` in absolute coords
+- Cell (col, row) top-vertex at `(offset_x + col*half_diagonal, offset_y + row*half_diagonal)`
+- Container: `half_diagonal * max_x + box` × `half_diagonal * max_y + box`
+- Wall stroke: `cell_size / 7` if `cell_size >= 18`, else `cell_size / 4.8` (from `wallStrokeWidth(for:.rhombic)`)
+- Wall→edge: UpperRight=0→1, LowerRight=1→2, LowerLeft=2→3, UpperLeft=3→0
+
+**Key map** (`RHOMBIC_KEYS`): Q/E/Z/C for UpperLeft/UpperRight/LowerLeft/LowerRight only — no W/X for UP/DOWN since those aren't native Rhombic directions. Arrow chords (e.g. ↑+→) still work via `_resolve_chord` producing `UPPER_RIGHT` etc., which the Rust resolves correctly. `_KEYS_BY_TYPE` wired for Rhombic.
+
+**`_move_with_slide` disabled for Rhombic**: the slide alts table (`_SLIDE_ALTS`) maps diagonal directions to cardinal alts (e.g. RIGHT as alt for UPPER_RIGHT), which on Rhombic would cause the Rust's fallback to fire to LOWER_RIGHT — an unintended move in the wrong direction. Guard added: if `maze_type == MazeType.RHOMBIC`, return False immediately after the first `maze.move()` attempt and let the Rust handle its own fallbacks internally.
+
+**Drag sector** (`_RHOMBIC_SECTOR_DIRECTIONS`): 4 × 90° sectors, boundaries at the cardinal axes. `sector = int(angle / 90) % 4` maps cleanly: 0°–90° → LOWER_RIGHT, 90°–180° → LOWER_LEFT, 180°–270° → UPPER_LEFT, 270°–360° → UPPER_RIGHT.
+
+**Start/goal validity guard** in `_build_request`: for Rhombic, if `(goal.x + goal.y) % 2 != 0`, decrement `goal_x` by 1. Default 11×11 grid → goal=(10,10), sum=20 ✓, so the guard never fires for the default; it protects arbitrary CLI dimensions (e.g. `--width 10 --height 9` → goal=(9,8), sum=17 odd → adjusted to (8,8)).
+
+**Menu**: `MazeType.RHOMBIC` added to `MenuState.SUPPORTED_TYPES`.
+
+**App defaults**: `_DEFAULTS[RHOMBIC] = (36, 11, 11)` — cell_size 36 gives `box ≈ 51px` for comfortable clicking; 11×11 ensures goal=(10,10) always satisfies the parity constraint.
+
+**Tests** (9 new across two files): `test_rhombic_renderer_draws_without_error`, `test_rhombic_cell_at_resolves_clicks` (5 coord spots + out-of-bounds), `test_solve_rhombic_maze_by_following_solution_path` (integration), updated `test_make_renderer_dispatch` (Rhombic now asserts `RhombicRenderer`, Upsilon is the new `NotImplementedError` case).
+
+Verified: 107 passed, 1 skipped (was 98 + 0 before this session). App smoke test under `SDL_VIDEODRIVER=dummy` with Q/E/Z/C keys + H/S/R exits cleanly.
 
 ## SESSION 14 [uncompleted]
 ### Stage 13 — Upsilon (octagon + square) grid rendering and play

@@ -9,6 +9,8 @@ naturally taller than square ones).
 CLI:
     python -m mazer                     # default Orthogonal
     python -m mazer --type sigma        # hexagonal grid
+    python -m mazer --type delta        # triangular grid
+    python -m mazer --type rhombic      # 45°-rotated diamond grid
     python -m mazer --type sigma --width 13 --height 11 --algo HuntAndKill
 
 Movement input (works for every maze type):
@@ -27,11 +29,15 @@ Movement input (works for every maze type):
     naturally on orthogonal too — pressing ↑+→ moves up if available,
     else right. Same forgiving feel as the iOS app's eight-way controls.
 
-Sigma also keeps the legacy "hex roguelike" key layout for muscle memory:
+Sigma/Delta also keep the legacy "hex roguelike" key layout for muscle memory:
     W                UP             Q                UPPER_LEFT
     X                DOWN           E                UPPER_RIGHT
                                     Z                LOWER_LEFT
                                     C                LOWER_RIGHT
+
+Rhombic uses the four diagonal keys only (no UP/DOWN cardinals):
+    Q                UPPER_LEFT     E                UPPER_RIGHT
+    Z                LOWER_LEFT     C                LOWER_RIGHT
 
 Common keys:
     H                Toggle heatmap overlay
@@ -80,10 +86,13 @@ _GAMEPLAY_REPEAT_INTERVAL = 100  # ms between subsequent auto-moves
 # default algorithm is RecursiveBacktracker for all types because it
 # produces winding paths that show off the heatmap and solution-path
 # overlays well; user can override with --algo.
+# Rhombic: 11×11 so goal=(10,10) satisfies (x+y)%2==0 (only even-sum
+# cells exist); cell_size=36 gives a diagonal≈51px for comfortable clicking.
 _DEFAULTS: dict[MazeType, tuple[int, int, int]] = {
     MazeType.ORTHOGONAL: (28, 20, 20),
     MazeType.SIGMA: (26, 11, 10),
     MazeType.DELTA: (30, 20, 12),
+    MazeType.RHOMBIC: (36, 11, 11),
 }
 
 ORTHOGONAL_KEYS: dict[int, Direction] = {
@@ -113,10 +122,21 @@ SIGMA_KEYS: dict[int, Direction] = {
 # current cell orientation (Normal vs Inverted).
 DELTA_KEYS: dict[int, Direction] = SIGMA_KEYS
 
+# Rhombic has only four diagonal directions. No W/X (UP/DOWN cardinals)
+# because Rhombic cells don't connect cardinally; Q/E/Z/C cover all moves.
+# Arrow chords (↑+→ etc.) still work and produce the four diagonals.
+RHOMBIC_KEYS: dict[int, Direction] = {
+    pygame.K_q: Direction.UPPER_LEFT,
+    pygame.K_e: Direction.UPPER_RIGHT,
+    pygame.K_z: Direction.LOWER_LEFT,
+    pygame.K_c: Direction.LOWER_RIGHT,
+}
+
 _KEYS_BY_TYPE: dict[MazeType, dict[int, Direction]] = {
     MazeType.ORTHOGONAL: ORTHOGONAL_KEYS,
     MazeType.SIGMA: SIGMA_KEYS,
     MazeType.DELTA: DELTA_KEYS,
+    MazeType.RHOMBIC: RHOMBIC_KEYS,
 }
 
 ARROW_KEYS: tuple[int, ...] = (pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT)
@@ -125,6 +145,7 @@ _HUD_HINT_BY_TYPE: dict[MazeType, str] = {
     MazeType.ORTHOGONAL: "arrows + chords + drag/click",
     MazeType.SIGMA: "chords / W·Q·E·Z·X·C / drag/click",
     MazeType.DELTA: "chords / W·Q·E·Z·X·C / drag/click",
+    MazeType.RHOMBIC: "Q·E·Z·C diagonals + chords + drag/click",
 }
 
 
@@ -154,6 +175,12 @@ _DELTA_HORIZONTAL_DIRS = frozenset({
 def _move_with_slide(maze, direction: Direction, maze_type: MazeType) -> bool:
     """Fire *direction*; if blocked, try a slide alternative.
 
+    Rhombic: no slide alts — only four diagonal directions exist and the
+    Rust's built-in fallback already handles any secondary attempt.  Sending
+    a cardinal slide alt (e.g. RIGHT as alt for UPPER_RIGHT) would cause the
+    Rust to fall back to LOWER_RIGHT, which is a valid Rhombic direction but
+    in the opposite vertical, producing unexpected moves.
+
     Delta horizontal slide is orientation-aware: when UPPER/LOWER_RIGHT/LEFT
     is blocked, slide to the one vertical neighbor that genuinely exists for
     the active cell's orientation — Normal cells connect downward only,
@@ -165,6 +192,8 @@ def _move_with_slide(maze, direction: Direction, maze_type: MazeType) -> bool:
     """
     if maze.move(direction):
         return True
+    if maze_type == MazeType.RHOMBIC:
+        return False
     if maze_type == MazeType.DELTA and direction in _DELTA_HORIZONTAL_DIRS:
         cells = maze.cells()
         active = next((c for c in cells if c.is_active), None)
@@ -260,6 +289,19 @@ _SIGMA_SECTOR_DIRECTIONS = (
     Direction.UP,           # sector 5: 270°–330°
 )
 
+# Rhombic: four 90° sectors, boundaries at the cardinal axes.
+# Angle 0° = rightward (screen x+), clockwise.  Sector = int(angle / 90) % 4.
+#   0°–90°   → LOWER_RIGHT  (center 45°)
+#   90°–180° → LOWER_LEFT   (center 135°)
+#   180°–270°→ UPPER_LEFT   (center 225°)
+#   270°–360°→ UPPER_RIGHT  (center 315°)
+_RHOMBIC_SECTOR_DIRECTIONS = (
+    Direction.LOWER_RIGHT,  # sector 0: 0°–90°
+    Direction.LOWER_LEFT,   # sector 1: 90°–180°
+    Direction.UPPER_LEFT,   # sector 2: 180°–270°
+    Direction.UPPER_RIGHT,  # sector 3: 270°–360°
+)
+
 
 def _direction_from_vector(dx: float, dy: float, maze_type: MazeType) -> Direction | None:
     """Resolve a drag vector to a Direction based on maze type.
@@ -269,6 +311,7 @@ def _direction_from_vector(dx: float, dy: float, maze_type: MazeType) -> Directi
       fallback — e.g. UPPER_RIGHT on a Normal delta cell tries UpperRight
       directly; on an Inverted cell the Rust resolves it to Up or Right.
     Sigma: angle mapped to nearest of 6 hex directions (60° sectors).
+    Rhombic: angle mapped to nearest of 4 diagonal directions (90° sectors).
     Returns None for zero-length vectors or unimplemented maze types.
     """
     if dx == 0 and dy == 0:
@@ -280,6 +323,9 @@ def _direction_from_vector(dx: float, dy: float, maze_type: MazeType) -> Directi
     if maze_type == MazeType.SIGMA:
         sector = int((angle + 30) % 360 / 60)
         return _SIGMA_SECTOR_DIRECTIONS[sector]
+    if maze_type == MazeType.RHOMBIC:
+        sector = int(angle / 90) % 4
+        return _RHOMBIC_SECTOR_DIRECTIONS[sector]
     return None
 
 
@@ -342,9 +388,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--type",
         dest="maze_type",
-        choices=[m.value.lower() for m in (MazeType.ORTHOGONAL, MazeType.SIGMA, MazeType.DELTA)],
+        choices=[m.value.lower() for m in (MazeType.ORTHOGONAL, MazeType.SIGMA, MazeType.DELTA, MazeType.RHOMBIC)],
         default=MazeType.ORTHOGONAL.value.lower(),
-        help="Maze type: orthogonal (default), sigma (hex), or delta (triangular).",
+        help="Maze type: orthogonal (default), sigma (hex), delta (triangular), or rhombic (diamond).",
     )
     parser.add_argument("--width", type=int, default=None, help="Grid width (cells). Default depends on type.")
     parser.add_argument("--height", type=int, default=None, help="Grid height (cells). Default depends on type.")
@@ -363,6 +409,10 @@ def _build_request(args: argparse.Namespace) -> tuple[MazeRequest, int]:
     width = args.width if args.width is not None else default_w
     height = args.height if args.height is not None else default_h
     algorithm = Algorithm(args.algo)
+    goal_x, goal_y = width - 1, height - 1
+    if maze_type == MazeType.RHOMBIC and (goal_x + goal_y) % 2 != 0:
+        # Only (x+y)%2==0 cells exist; adjust goal by one step.
+        goal_x = max(0, goal_x - 1)
     request = MazeRequest(
         maze_type=maze_type,
         width=width,
@@ -370,7 +420,7 @@ def _build_request(args: argparse.Namespace) -> tuple[MazeRequest, int]:
         algorithm=algorithm,
         capture_steps=False,
         start=Coord(x=0, y=0),
-        goal=Coord(x=width - 1, y=height - 1),
+        goal=Coord(x=goal_x, y=goal_y),
     )
     return request, cell_size
 
@@ -381,6 +431,8 @@ def _window_size(request: MazeRequest, cell_size: int) -> tuple[int, int]:
     Orthogonal: width = W*cell, height = H*cell + HUD.
     Sigma: hex bounding box from the iOS reference layout, plus HUD.
     Delta: triangle bounding box (cell_size*(cols+1)/2 × tri_height*rows), plus HUD.
+    Rhombic: diamond bounding box from RhombicMazeView (half_diagonal*max_x + diagonal),
+      plus HUD.  max_x = width-1, max_y = height-1.
     """
     if request.maze_type == MazeType.ORTHOGONAL:
         return (request.width * cell_size, request.height * cell_size + HUD_HEIGHT)
@@ -393,6 +445,12 @@ def _window_size(request: MazeRequest, cell_size: int) -> tuple[int, int]:
         tri_height = math.sqrt(3) / 2 * cell_size
         w = int(round(cell_size * (request.width + 1) / 2))
         h = int(round(tri_height * request.height)) + HUD_HEIGHT
+        return (w, h)
+    if request.maze_type == MazeType.RHOMBIC:
+        diagonal = cell_size * math.sqrt(2)
+        half_diagonal = diagonal / 2
+        w = int(round(half_diagonal * (request.width - 1) + diagonal))
+        h = int(round(half_diagonal * (request.height - 1) + diagonal)) + HUD_HEIGHT
         return (w, h)
     raise NotImplementedError(f"window sizing for {request.maze_type.value}")
 

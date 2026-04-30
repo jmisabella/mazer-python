@@ -142,16 +142,64 @@ def test_delta_cell_at_resolves_clicks() -> None:
         assert renderer.cell_at((-5, -5), cells) is None
 
 
+def test_rhombic_renderer_draws_without_error() -> None:
+    """A small rhombic maze should render diamonds + walls + active marker cleanly."""
+    from mazer.ui.renderer import RhombicRenderer
+
+    surface = pygame.Surface((400, 400))
+    request = MazeRequest(
+        maze_type=MazeType.RHOMBIC,
+        width=7,
+        height=7,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0),
+        goal=Coord(6, 6),
+    )
+    with Maze(request) as m:
+        renderer = RhombicRenderer(surface, cell_size=30)
+        renderer.draw(m.cells(), show_heatmap=False, show_solution=False)
+        renderer.draw(m.cells(), show_heatmap=True, show_solution=True)
+    assert _surface_has_content(surface)
+
+
+def test_rhombic_cell_at_resolves_clicks() -> None:
+    """Clicking at the center of a rhombic diamond resolves to that cell's coord."""
+    import math
+    from mazer.ui.renderer import RhombicRenderer
+
+    cell_size = 40
+    surface = pygame.Surface((600, 600))
+    request = MazeRequest(
+        maze_type=MazeType.RHOMBIC,
+        width=7,
+        height=7,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0),
+        goal=Coord(6, 6),
+    )
+    with Maze(request) as m:
+        cells = m.cells()
+        renderer = RhombicRenderer(surface, cell_size=cell_size)
+        # Test only valid rhombic cells (x+y even).
+        for coord in (Coord(0, 0), Coord(2, 0), Coord(1, 1), Coord(4, 2), Coord(6, 6)):
+            cx, cy = renderer._cell_center(coord.x, coord.y)
+            result = renderer.cell_at((int(round(cx)), int(round(cy))), cells)
+            assert result == coord, f"cell_at center of {coord} returned {result}"
+        # A click well outside the maze rect returns None.
+        assert renderer.cell_at((-10, -10), cells) is None
+
+
 def test_make_renderer_dispatch() -> None:
     """The factory returns a renderer matching the maze type, or raises."""
-    from mazer.ui.renderer import DeltaRenderer, OrthogonalRenderer, SigmaRenderer, make_renderer
+    from mazer.ui.renderer import DeltaRenderer, OrthogonalRenderer, RhombicRenderer, SigmaRenderer, make_renderer
 
     surface = pygame.Surface((100, 100))
     assert isinstance(make_renderer(MazeType.ORTHOGONAL, surface, 20), OrthogonalRenderer)
     assert isinstance(make_renderer(MazeType.SIGMA, surface, 20), SigmaRenderer)
     assert isinstance(make_renderer(MazeType.DELTA, surface, 20), DeltaRenderer)
+    assert isinstance(make_renderer(MazeType.RHOMBIC, surface, 20), RhombicRenderer)
     with pytest.raises(NotImplementedError):
-        make_renderer(MazeType.RHOMBIC, surface, 20)
+        make_renderer(MazeType.UPSILON, surface, 20)
 
 
 # --- Chord arrow resolver -------------------------------------------------

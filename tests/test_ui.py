@@ -220,6 +220,146 @@ def test_orthogonal_direction_lookup() -> None:
     assert orthogonal_direction(Coord(2, 2), Coord(2, 2)) is None
 
 
+# --- Drag-to-move -----------------------------------------------------------
+
+def test_drag_to_move_orthogonal() -> None:
+    """Drag across two orthogonal cells fires two moves in sequence."""
+    from mazer.ui.renderer import OrthogonalRenderer
+    from mazer.ui.app import _DragState
+
+    cell_size = 20
+    surface = pygame.Surface((200, 200))
+    renderer = OrthogonalRenderer(surface, cell_size=cell_size)
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    with Maze(request) as maze:
+        cells = maze.cells()
+        path = sorted([c for c in cells if c.on_solution_path], key=lambda c: c.distance)
+        if len(path) < 3:
+            pytest.skip("solution path too short for drag test")
+        A, B, C = path[0], path[1], path[2]
+
+        def ortho_center(coord: Coord) -> tuple[int, int]:
+            return (coord.x * cell_size + cell_size // 2,
+                    coord.y * cell_size + cell_size // 2)
+
+        drag = _DragState()
+        assert not drag.active
+
+        # BUTTONDOWN at B: player is at A, click B fires move A→B.
+        fired = drag.begin(ortho_center(B.coord), renderer, maze, maze.cells(), MazeType.ORTHOGONAL)
+        assert fired, "BUTTONDOWN on adjacent linked cell should fire a move"
+        assert drag.active
+
+        # MOUSEMOTION to C: chains B→C.
+        fired = drag.motion(ortho_center(C.coord), renderer, maze, MazeType.ORTHOGONAL)
+        assert fired, "MOUSEMOTION into adjacent linked cell should fire a move"
+
+        # Verify active cell advanced to C.
+        cells_final = maze.cells()
+        active = next(c for c in cells_final if c.is_active)
+        assert active.coord == C.coord
+
+        drag.end()
+        assert not drag.active
+
+
+def test_drag_to_move_sigma() -> None:
+    """Drag across two sigma cells fires two moves in sequence."""
+    from mazer.ui.renderer import SigmaRenderer
+    from mazer.ui.app import _DragState
+
+    surface = pygame.Surface((400, 400))
+    renderer = SigmaRenderer(surface, cell_size=24, offset=(10, 10))
+
+    request = MazeRequest(
+        maze_type=MazeType.SIGMA,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    with Maze(request) as maze:
+        cells = maze.cells()
+        path = sorted([c for c in cells if c.on_solution_path], key=lambda c: c.distance)
+        if len(path) < 3:
+            pytest.skip("solution path too short for drag test")
+        A, B, C = path[0], path[1], path[2]
+
+        def sigma_center(coord: Coord) -> tuple[int, int]:
+            cx, cy = renderer._cell_center(coord.x, coord.y)
+            return (int(cx), int(cy))
+
+        drag = _DragState()
+
+        fired = drag.begin(sigma_center(B.coord), renderer, maze, maze.cells(), MazeType.SIGMA)
+        assert fired, "BUTTONDOWN on adjacent linked hex should fire a move"
+
+        fired = drag.motion(sigma_center(C.coord), renderer, maze, MazeType.SIGMA)
+        assert fired, "MOUSEMOTION into adjacent linked hex should fire a move"
+
+        cells_final = maze.cells()
+        active = next(c for c in cells_final if c.is_active)
+        assert active.coord == C.coord
+
+        drag.end()
+        assert not drag.active
+
+
+def test_drag_motion_ignored_when_not_active() -> None:
+    """motion() is a no-op when drag hasn't started (no BUTTONDOWN)."""
+    from mazer.ui.renderer import OrthogonalRenderer
+    from mazer.ui.app import _DragState
+
+    cell_size = 20
+    surface = pygame.Surface((200, 200))
+    renderer = OrthogonalRenderer(surface, cell_size=cell_size)
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=3, height=3,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(2, 2),
+    )
+    with Maze(request) as maze:
+        drag = _DragState()
+        fired = drag.motion((cell_size + cell_size // 2, cell_size // 2), renderer, maze, MazeType.ORTHOGONAL)
+        assert not fired
+
+
+def test_drag_begin_non_adjacent_does_not_move() -> None:
+    """BUTTONDOWN on a non-adjacent cell starts the drag but fires no move."""
+    from mazer.ui.renderer import OrthogonalRenderer
+    from mazer.ui.app import _DragState
+
+    cell_size = 20
+    surface = pygame.Surface((200, 200))
+    renderer = OrthogonalRenderer(surface, cell_size=cell_size)
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    with Maze(request) as maze:
+        drag = _DragState()
+        # Click on cell (3, 3) — far from the active cell at (0, 0).
+        far_pos = (3 * cell_size + cell_size // 2, 3 * cell_size + cell_size // 2)
+        fired = drag.begin(far_pos, renderer, maze, maze.cells(), MazeType.ORTHOGONAL)
+        assert not fired, "non-adjacent click should not fire a move"
+        assert drag.active, "drag session should still be active"
+
+        # Active cell unchanged.
+        cells = maze.cells()
+        active = next(c for c in cells if c.is_active)
+        assert active.coord == Coord(0, 0)
+
+
 def test_sigma_direction_lookup_returns_linked_name() -> None:
     """For every direction in a cell's ``linked`` set, the lookup recovers it.
 

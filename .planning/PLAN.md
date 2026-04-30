@@ -336,7 +336,7 @@ Verification:
 - Visual sanity-check PNGs (orthogonal 6×6 + sigma 5×5) confirm open-exit dots appear at the active cell's open edges in both maze types.
 - Sigma boundary-clamp behavior unchanged — `sigma_direction` and `build_sigma_linked_pairs` use the same `hex_candidate_deltas` path the renderer was already using, so the existing `test_solve_sigma_maze_by_following_solution_path` continues to pass.
 
-## SESSION 9 [uncompleted]
+## SESSION 9 [completed 2026-04-26]
 ### Stage 8 — Drag-to-move (continuous mouse/trackpad navigation)
 
 Currently click-to-move requires one click per cell. The iOS app lets the player slide a finger in any direction from anywhere on the grid and it moves through multiple cells continuously — a much smoother play experience. Replicate this with Pygame mouse events so both trackpad and regular mouse users get the same fluid feel.
@@ -360,6 +360,24 @@ Acceptance:
 - Click-and-hold anywhere, slide across the maze, player advances cell-by-cell following the cursor through open walls.
 - Releasing the mouse ends movement.
 - Single tap still moves one cell (unchanged from Session 8).
+
+#### Session 9 notes
+
+Design decision: unified drag model. The plan offered two options — keep MOUSEBUTTONDOWN as a separate click-to-move path plus add MOUSEMOTION for drag, or unify into a single BUTTONDOWN/MOTION/BUTTONUP cycle. Unified was chosen: `BUTTONDOWN` starts the drag and immediately tries a move (so single taps "just work" as the degenerate zero-motion case), `MOUSEMOTION` chains additional moves as the cursor crosses open walls, `BUTTONUP` ends the session. No separate click handler; no threshold tuning knob needed because "cursor must enter a different cell" is the natural threshold from the existing `cell_at` geometry.
+
+Implementation: `_DragState` class extracted into `app.py` (same testability pattern as `_resolve_chord`). Has three methods: `begin(pos, renderer, maze, cells, maze_type) -> bool`, `motion(pos, renderer, maze, maze_type) -> bool`, `end()`. Each returns True if a move was fired. `motion` calls `maze.cells()` internally to get the current active cell after each prior move (cache hit if no move fired, re-fetch if it did). No separate `drag_last_cell` tracking — the guard `target == active_cell.coord` is sufficient since after each move the active cell IS the cell we just moved to.
+
+Regeneration (R/N) now calls `drag.end()` so an in-progress drag doesn't ghost into the new maze.
+
+HUD hints updated: "drag/click to move" for both maze types. Module docstring updated to lead with drag.
+
+Tests (4 new, all in `test_ui.py`):
+- `test_drag_to_move_orthogonal` — begin at B (adjacent to start A), motion to C (adjacent to B), assert 2 moves fired and active is at C.
+- `test_drag_to_move_sigma` — same shape on hex grid using `renderer._cell_center` for pixel positions.
+- `test_drag_motion_ignored_when_not_active` — motion without a prior begin returns False.
+- `test_drag_begin_non_adjacent_does_not_move` — begin on a far cell returns False but sets `drag.active = True`.
+
+Verified: 61 passed (was 57 before this session). Full suite ~0.29s.
 
 ## SESSION 10 [uncompleted]
 ### Stage 9 — Gradient cell backgrounds (replace flat default color)

@@ -18,7 +18,9 @@ Movement input (works for every maze type):
         ↑ + ←  → UPPER_LEFT
         ↓ + →  → LOWER_RIGHT
         ↓ + ←  → LOWER_LEFT
-    Left mouse click on an *adjacent linked* cell → move there.
+    Left mouse button on an *adjacent linked* cell → move there (single
+    tap). Click-and-drag across the grid → chains moves cell-by-cell as
+    the cursor crosses open walls (continuous trackpad/mouse navigation).
 
     The Rust ``make_move`` has built-in fallback for every direction
     (e.g. UPPER_RIGHT tries UpperRight → Up → Right), so chords work
@@ -101,8 +103,8 @@ _KEYS_BY_TYPE: dict[MazeType, dict[int, Direction]] = {
 ARROW_KEYS: tuple[int, ...] = (pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT)
 
 _HUD_HINT_BY_TYPE: dict[MazeType, str] = {
-    MazeType.ORTHOGONAL: "arrows + diag chords + click to move",
-    MazeType.SIGMA: "arrow chords / W·Q·E·Z·X·C / click to move",
+    MazeType.ORTHOGONAL: "arrows + chords + drag/click to move",
+    MazeType.SIGMA: "arrow chords / W·Q·E·Z·X·C / drag/click to move",
 }
 
 
@@ -154,6 +156,67 @@ def _direction_for_click(
     if maze_type == MazeType.SIGMA:
         return sigma_direction(active, target_coord, cells)
     return None
+
+class _DragState:
+    """Mouse drag state machine for continuous multi-cell navigation.
+
+    BUTTONDOWN → ``begin`` (fires the first move if on an adjacent linked cell
+    and starts the drag session). MOUSEMOTION → ``motion`` (fires a move each
+    time the cursor enters a new adjacent linked cell). BUTTONUP → ``end``.
+
+    Single tap is the degenerate case: BUTTONDOWN fires the move, no MOTION
+    event crosses a new cell boundary before BUTTONUP ends the session.
+    """
+
+    def __init__(self) -> None:
+        self.active = False
+
+    def begin(
+        self,
+        pos: tuple[int, int],
+        renderer,
+        maze,
+        cells: list,
+        maze_type: MazeType,
+    ) -> bool:
+        """Start a drag session. Returns True if a move was fired."""
+        self.active = True
+        target = renderer.cell_at(pos, cells)
+        if target is None:
+            return False
+        active_cell = next((c for c in cells if c.is_active), None)
+        if active_cell is None:
+            return False
+        direction = _direction_for_click(active_cell, target, cells, maze_type)
+        if direction is not None:
+            return maze.move(direction)
+        return False
+
+    def motion(
+        self,
+        pos: tuple[int, int],
+        renderer,
+        maze,
+        maze_type: MazeType,
+    ) -> bool:
+        """Handle MOUSEMOTION. Fires a move if the cursor entered a new adjacent linked cell."""
+        if not self.active:
+            return False
+        cells = maze.cells()
+        active_cell = next((c for c in cells if c.is_active), None)
+        if active_cell is None:
+            return False
+        target = renderer.cell_at(pos, cells)
+        if target is None or target == active_cell.coord:
+            return False
+        direction = _direction_for_click(active_cell, target, cells, maze_type)
+        if direction is not None:
+            return maze.move(direction)
+        return False
+
+    def end(self) -> None:
+        self.active = False
+
 
 HUD_BG = OFF_WHITE
 HUD_TITLE_COLOR = (40, 40, 40)
@@ -287,6 +350,7 @@ def main(argv: list[str] | None = None) -> None:
     # second move (or, if the user has key-repeat enabled externally, so
     # autorepeat doesn't spam the chord). Cleared on the matching KEYUP.
     arrows_consumed: set[int] = set()
+    drag = _DragState()
 
     try:
         running = True
@@ -305,6 +369,7 @@ def main(argv: list[str] | None = None) -> None:
                         maze.close()
                         maze = Maze(request)
                         arrows_consumed.clear()
+                        drag.end()
                     elif event.key in ARROW_KEYS:
                         if event.key in arrows_consumed:
                             continue
@@ -325,18 +390,11 @@ def main(argv: list[str] | None = None) -> None:
                 elif event.type == pygame.KEYUP and event.key in ARROW_KEYS:
                     arrows_consumed.discard(event.key)
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    cells_for_click = maze.cells()
-                    target = renderer.cell_at(event.pos, cells_for_click)
-                    if target is not None:
-                        active = next(
-                            (c for c in cells_for_click if c.is_active), None
-                        )
-                        if active is not None:
-                            direction = _direction_for_click(
-                                active, target, cells_for_click, request.maze_type
-                            )
-                            if direction is not None:
-                                maze.move(direction)
+                    drag.begin(event.pos, renderer, maze, maze.cells(), request.maze_type)
+                elif event.type == pygame.MOUSEMOTION:
+                    drag.motion(event.pos, renderer, maze, request.maze_type)
+                elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                    drag.end()
 
             cells = maze.cells()
             solved = _is_solved(cells)

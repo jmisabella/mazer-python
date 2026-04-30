@@ -415,7 +415,7 @@ iOS gradient logic ported from ``cellBackgroundColor`` in ``MazeCellAppearance.s
 
 Verified: 79 passed (was 61 before this session, +1 new test plus 17 residual from Sessions 8–9 already counted). Full suite ~0.40s. Interactive acceptance (visual gradient appearance, R regeneration) requires the user at a real display.
 
-## SESSION 11 [uncompleted]
+## SESSION 11 [completed 2026-04-29]
 ### Stage 10 — In-game main menu (maze type + algorithm picker)
 
 Currently maze type and algorithm are CLI-only (`--type`, `--algo`). Add an in-game main menu so players can change both without restarting the process.
@@ -440,6 +440,26 @@ Acceptance:
 - Player can change type, algorithm, and size, then generate without restarting.
 - Esc cancels and returns to the current maze unchanged.
 - Incompatible type+algorithm combos show an in-menu error rather than crashing.
+
+#### Session 11 notes
+
+Architecture: **`src/mazer/ui/menu.py`** (new file, ~220 lines) contains all menu logic; `app.py` imports from it. Clean separation: drawing and state are co-located in `menu.py`; the game loop in `app.py` only decides *when* to open/close the menu and acts on the returned request.
+
+`MenuState` is pure data — no FFI calls, no pygame surface required. Every handler (`handle_keydown`, `handle_click`) returns `(menu_open: bool, request_or_None)` so the caller never needs to inspect internal state. Error feedback from the Rust flows back via `set_generation_error()`: the caller catches `MazeGenerationError` after `Maze(request)`, calls that method, and the menu re-opens with an inline red error string focused on the Algorithm row.
+
+`MenuLayout` is a plain dataclass produced by `draw_menu()` each frame, holding the pixel rects for all clickable regions (rows, left/right arrows, Generate button). Stored as `menu_layout` in the game loop so `MOUSEBUTTONDOWN` can call `state.handle_click(pos, layout)` without re-deriving geometry.
+
+`draw_menu()` dims the whole surface with a semi-transparent overlay, then paints a rounded panel with a fixed-height layout (460×334px centered). Each data row (Type, Algorithm, Width, Height) shows `‹ value ›` arrows that highlight in blue when the row is focused. The Generate button turns darker when focused. Error text appears below the button in red.
+
+`_apply_new_request()` helper in `app.py` handles the full swap on Generate: resizes the display window if dimensions changed (different maze type or different cell count), creates the new `Maze`, closes the old one, constructs the right renderer for the new type. Returns `(maze, renderer, cell_size, screen)` — screen may be a new surface after `set_mode`.
+
+`M` key opens the menu with current request as defaults. Arrow keys (UP/DOWN to navigate rows, LEFT/RIGHT to change values) are intercepted exclusively by the menu while it's open — no gameplay moves fire. `Esc` inside the menu closes it without changing the maze; `Esc` outside quits the game. `N` key removed from the HUD hint (still works as R alias); replaced by `M settings`.
+
+Incompatible type+algorithm: `RecursiveDivision` on Orthogonal works fine; truly incompatible combos (e.g. `BinaryTree` on Sigma) cause `MazeGenerationError` which is caught, `set_generation_error()` called, menu re-displays with the error. Not observed in practice on the two currently-supported maze types, but the path is exercised and correct.
+
+Tests: 13 new tests in `test_ui.py` covering `MenuState` unit logic (initial state, navigation, value changes, width/height clamping, generate, error), `draw_menu` surface content and layout, click handling via left-arrow and Generate button, and an app-level smoke test (M opens, ESC closes, no crash).
+
+Verified: 92 passed, 1 skipped (was 79 + 1 before this session). Full suite ~0.41s. Interactive acceptance (visual menu appearance, Generate with type switch) requires user at a real display.
 
 ## SESSION 12 [uncompleted]
 ### Stage 11 — Delta (triangular) grid rendering and play

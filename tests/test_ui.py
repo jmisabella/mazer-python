@@ -433,6 +433,319 @@ def test_gradient_changes_default_cell_colors() -> None:
     assert plain_colors != grad_colors, "gradient render should produce different colors from plain off-white"
 
 
+# --- In-game menu (MenuState) -----------------------------------------------
+
+def test_menu_initial_state_mirrors_request() -> None:
+    """MenuState seeds its fields from the request that opened it."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.SIGMA,
+        width=8,
+        height=6,
+        algorithm=Algorithm.WILSONS,
+        start=Coord(0, 0),
+        goal=Coord(7, 5),
+    )
+    state = MenuState(request)
+    assert state.type_idx == MenuState.SUPPORTED_TYPES.index(MazeType.SIGMA)
+    assert state.algo_idx == MenuState.ALGORITHMS.index(Algorithm.WILSONS)
+    assert state.width == 8
+    assert state.height == 6
+    assert state.section == MenuState.SECTION_TYPE
+    assert state.error is None
+
+
+def test_menu_esc_closes_without_change() -> None:
+    """ESC returns (False, None) — close menu, keep current maze."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=10, height=10,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(9, 9),
+    )
+    state = MenuState(request)
+    open_, req = state.handle_keydown(pygame.K_ESCAPE)
+    assert open_ is False
+    assert req is None
+
+
+def test_menu_navigation_down_and_up() -> None:
+    """DOWN advances the section; UP retreats it; they wrap at boundaries."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    state = MenuState(request)
+    assert state.section == MenuState.SECTION_TYPE
+
+    open_, req = state.handle_keydown(pygame.K_DOWN)
+    assert open_ is True and req is None
+    assert state.section == MenuState.SECTION_ALGO
+
+    state.handle_keydown(pygame.K_DOWN)
+    assert state.section == MenuState.SECTION_WIDTH
+
+    # Go back up.
+    state.handle_keydown(pygame.K_UP)
+    assert state.section == MenuState.SECTION_ALGO
+
+    # Wrap: UP from SECTION_TYPE wraps to last section.
+    state.section = MenuState.SECTION_TYPE
+    state.handle_keydown(pygame.K_UP)
+    assert state.section == MenuState.NUM_SECTIONS - 1
+
+
+def test_menu_right_changes_value() -> None:
+    """RIGHT increments the current section's value; LEFT decrements."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=10, height=10,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(9, 9),
+    )
+    state = MenuState(request)
+
+    # Cycle algorithm forward.
+    state.section = MenuState.SECTION_ALGO
+    orig = state.algo_idx
+    state.handle_keydown(pygame.K_RIGHT)
+    assert state.algo_idx == (orig + 1) % len(MenuState.ALGORITHMS)
+
+    # Cycle algorithm back.
+    state.handle_keydown(pygame.K_LEFT)
+    assert state.algo_idx == orig
+
+    # Width increments.
+    state.section = MenuState.SECTION_WIDTH
+    state.handle_keydown(pygame.K_RIGHT)
+    assert state.width == 11
+
+    state.handle_keydown(pygame.K_LEFT)
+    assert state.width == 10
+
+
+def test_menu_width_height_clamped_at_bounds() -> None:
+    """Width and height stay within [MIN_SIZE, MAX_SIZE]."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    state = MenuState(request)
+    state.section = MenuState.SECTION_WIDTH
+    state.width = MenuState.MAX_SIZE
+    state.handle_keydown(pygame.K_RIGHT)  # already at max
+    assert state.width == MenuState.MAX_SIZE
+
+    state.width = MenuState.MIN_SIZE
+    state.handle_keydown(pygame.K_LEFT)  # already at min
+    assert state.width == MenuState.MIN_SIZE
+
+
+def test_menu_generate_returns_request() -> None:
+    """Enter on the Generate section closes the menu and returns a MazeRequest."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=7, height=8,
+        algorithm=Algorithm.HUNT_AND_KILL,
+        start=Coord(0, 0), goal=Coord(6, 7),
+    )
+    state = MenuState(request)
+    # Navigate to Generate.
+    while state.section != MenuState.SECTION_GENERATE:
+        state.handle_keydown(pygame.K_DOWN)
+
+    open_, new_req = state.handle_keydown(pygame.K_RETURN)
+    assert open_ is False
+    assert new_req is not None
+    assert new_req.maze_type == MazeType.ORTHOGONAL
+    assert new_req.algorithm == Algorithm.HUNT_AND_KILL
+    assert new_req.width == 7
+    assert new_req.height == 8
+
+
+def test_menu_generate_reflects_changed_selections() -> None:
+    """The returned request uses the values the user navigated to, not the originals."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    state = MenuState(request)
+
+    # Switch to Sigma.
+    state.section = MenuState.SECTION_TYPE
+    state.handle_keydown(pygame.K_RIGHT)
+    new_type = MenuState.SUPPORTED_TYPES[state.type_idx]
+    assert new_type == MazeType.SIGMA
+
+    # Resize to 6×7.
+    state.section = MenuState.SECTION_WIDTH
+    for _ in range(1):
+        state.handle_keydown(pygame.K_RIGHT)
+    state.section = MenuState.SECTION_HEIGHT
+    for _ in range(2):
+        state.handle_keydown(pygame.K_RIGHT)
+
+    state.section = MenuState.SECTION_GENERATE
+    _, new_req = state.handle_keydown(pygame.K_RETURN)
+    assert new_req is not None
+    assert new_req.maze_type == MazeType.SIGMA
+    assert new_req.width == 6
+    assert new_req.height == 7
+
+
+def test_menu_enter_on_non_generate_does_not_close() -> None:
+    """Pressing Enter on any row other than Generate keeps the menu open."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    state = MenuState(request)
+    assert state.section == MenuState.SECTION_TYPE
+    open_, req = state.handle_keydown(pygame.K_RETURN)
+    assert open_ is True
+    assert req is None
+
+
+def test_menu_set_generation_error_focuses_algo() -> None:
+    """After a failed generation, error is set and focus jumps to Algorithm."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    state = MenuState(request)
+    state.set_generation_error()
+    assert state.error is not None
+    assert len(state.error) > 0
+    assert state.section == MenuState.SECTION_ALGO
+
+
+def test_menu_navigation_clears_error() -> None:
+    """Moving between sections clears any prior error message."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    state = MenuState(request)
+    state.set_generation_error()
+    assert state.error is not None
+
+    state.handle_keydown(pygame.K_DOWN)
+    assert state.error is None
+
+
+def test_menu_draw_produces_content() -> None:
+    """draw_menu paints onto the surface and returns a non-empty MenuLayout."""
+    from mazer.ui.menu import MenuState, draw_menu
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=10, height=10,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(9, 9),
+    )
+    surface = pygame.Surface((600, 500))
+    font = pygame.font.SysFont(None, 22)
+    state = MenuState(request)
+    layout = draw_menu(surface, state, font)
+
+    assert _surface_has_content(surface)
+    assert len(layout.rows) > 0
+    assert len(layout.left_arrows) > 0
+    assert len(layout.right_arrows) > 0
+    assert layout.generate_btn.width > 0
+
+
+def test_menu_click_left_arrow_changes_value() -> None:
+    """Clicking a left arrow decrements the matching row's value."""
+    from mazer.ui.menu import MenuState, draw_menu
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=10, height=10,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(9, 9),
+    )
+    surface = pygame.Surface((600, 500))
+    font = pygame.font.SysFont(None, 22)
+    state = MenuState(request)
+    layout = draw_menu(surface, state, font)
+
+    orig_w = state.width
+    la = layout.left_arrows[MenuState.SECTION_WIDTH]
+    open_, req = state.handle_click((la.centerx, la.centery), layout)
+    assert open_ is True
+    assert state.width == orig_w - 1
+
+
+def test_menu_click_generate_button_returns_request() -> None:
+    """Clicking the Generate button closes the menu and returns a request."""
+    from mazer.ui.menu import MenuState, draw_menu
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    surface = pygame.Surface((600, 500))
+    font = pygame.font.SysFont(None, 22)
+    state = MenuState(request)
+    layout = draw_menu(surface, state, font)
+
+    btn = layout.generate_btn
+    open_, req = state.handle_click((btn.centerx, btn.centery), layout)
+    assert open_ is False
+    assert req is not None
+
+
+# --- App smoke test with menu -------------------------------------------
+
+def test_app_menu_opens_and_closes_via_m_and_esc() -> None:
+    """Pressing M opens the menu; ESC inside the menu closes it without changing the maze."""
+    from mazer.ui.app import main
+
+    events = [
+        pygame.event.Event(pygame.KEYDOWN, key=pygame.K_m, mod=0, unicode="m", scancode=0),
+        pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE, mod=0, unicode="", scancode=0),
+        pygame.event.Event(pygame.QUIT),
+    ]
+    pygame.event.post(events[0])
+    pygame.event.post(events[1])
+    pygame.event.post(events[2])
+    main([])  # should not raise
+
+
 def test_sigma_direction_lookup_returns_linked_name() -> None:
     """For every direction in a cell's ``linked`` set, the lookup recovers it.
 

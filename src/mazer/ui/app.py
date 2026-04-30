@@ -36,10 +36,9 @@ Sigma also keeps the legacy "hex roguelike" key layout for muscle memory:
 Common keys:
     H                Toggle heatmap overlay
     S                Toggle solution-path overlay
-    R                Regenerate with the current request (same params)
-    N                "New maze" — alias for R; reserved for a real picker
-                     dialog later. Behaves identically.
-    Esc              Quit (window close also quits).
+    R / N            Regenerate with the current request (same params)
+    M                Open settings menu (change type, algorithm, size)
+    Esc              Quit (or close menu if menu is open).
 
 Open-exit dots: the active cell shows small white dots near each open
 edge — affordance equivalent to the iOS D-pad's per-direction enabled
@@ -53,8 +52,9 @@ import math
 
 import pygame
 
-from mazer.maze import Cell, Maze
+from mazer.maze import Cell, Maze, MazeGenerationError
 from mazer.types import Algorithm, Coord, Direction, MazeRequest, MazeType
+from mazer.ui.menu import MenuLayout, MenuState, draw_menu
 from mazer.ui.renderer import (
     OFF_WHITE,
     generate_gradient,
@@ -103,8 +103,8 @@ _KEYS_BY_TYPE: dict[MazeType, dict[int, Direction]] = {
 ARROW_KEYS: tuple[int, ...] = (pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT)
 
 _HUD_HINT_BY_TYPE: dict[MazeType, str] = {
-    MazeType.ORTHOGONAL: "arrows + chords + drag/click to move",
-    MazeType.SIGMA: "arrow chords / W·Q·E·Z·X·C / drag/click to move",
+    MazeType.ORTHOGONAL: "arrows + chords + drag/click",
+    MazeType.SIGMA: "chords / W·Q·E·Z·X·C / drag/click",
 }
 
 
@@ -297,7 +297,7 @@ def _draw_hud(
     hints = (
         f"H heatmap:{'on' if show_heatmap else 'off'}    "
         f"S solution:{'on' if show_solution else 'off'}    "
-        f"R regen    N new    {move_hint}"
+        f"R regen    M settings    {move_hint}"
     )
     surface.blit(font.render(title, True, HUD_TITLE_COLOR), (12, 8))
     surface.blit(font.render(hints, True, HUD_HINT_COLOR), (12, 30))
@@ -320,6 +320,30 @@ def _draw_solved_overlay(
     surface.blit(text, text_rect)
     hint = hint_font.render("Press R for a new maze", True, SOLVED_TEXT_COLOR)
     surface.blit(hint, hint.get_rect(midtop=(rect.centerx, text_rect.bottom + 8)))
+
+
+def _apply_new_request(
+    new_request: MazeRequest,
+    old_maze: Maze,
+    screen: pygame.Surface,
+) -> tuple[Maze, object, int, pygame.Surface]:
+    """Create a new Maze + Renderer for *new_request*.
+
+    Resizes the display window when the new dimensions differ from the
+    current window.  Returns ``(maze, renderer, cell_size, screen)``; the
+    returned *screen* may be a new surface if the window was resized.
+
+    Raises ``MazeGenerationError`` on incompatible type/algorithm combos so
+    the caller can surface the error back to the menu without crashing.
+    """
+    cell_size, _, _ = _DEFAULTS.get(new_request.maze_type, (28, 0, 0))
+    new_size = _window_size(new_request, cell_size)
+    if new_size != screen.get_size():
+        screen = pygame.display.set_mode(new_size)
+    new_maze = Maze(new_request)  # raises MazeGenerationError if incompatible
+    old_maze.close()
+    renderer = make_renderer(new_request.maze_type, screen, cell_size, offset=(0, HUD_HEIGHT))
+    return new_maze, renderer, cell_size, screen
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -350,15 +374,75 @@ def main(argv: list[str] | None = None) -> None:
     arrows_consumed: set[int] = set()
     drag = _DragState()
 
+    menu_state: MenuState | None = None
+    menu_layout: MenuLayout | None = None
+
     try:
         running = True
         while running:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
+
+                # ---- Menu open: route all input to the menu ----------------
+                elif menu_state is not None:
+                    if event.type == pygame.KEYDOWN:
+                        open_, new_request = menu_state.handle_keydown(event.key)
+                        if not open_:
+                            if new_request is not None:
+                                try:
+                                    maze, renderer, cell_size, screen = _apply_new_request(
+                                        new_request, maze, screen
+                                    )
+                                    request = new_request
+                                    key_map = _KEYS_BY_TYPE.get(request.maze_type, ORTHOGONAL_KEYS)
+                                    gradient = generate_gradient()
+                                    renderer.set_gradient(gradient)
+                                    arrows_consumed.clear()
+                                    drag.end()
+                                    pygame.display.set_caption(
+                                        f"Mazer — {request.maze_type.value} · "
+                                        f"{request.algorithm.value} {request.width}×{request.height}"
+                                    )
+                                except MazeGenerationError:
+                                    menu_state.set_generation_error()
+                                    open_ = True
+                            if not open_:
+                                menu_state = None
+                                menu_layout = None
+                    elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                        if menu_layout is not None:
+                            open_, new_request = menu_state.handle_click(event.pos, menu_layout)
+                            if not open_:
+                                if new_request is not None:
+                                    try:
+                                        maze, renderer, cell_size, screen = _apply_new_request(
+                                            new_request, maze, screen
+                                        )
+                                        request = new_request
+                                        key_map = _KEYS_BY_TYPE.get(request.maze_type, ORTHOGONAL_KEYS)
+                                        gradient = generate_gradient()
+                                        renderer.set_gradient(gradient)
+                                        arrows_consumed.clear()
+                                        drag.end()
+                                        pygame.display.set_caption(
+                                            f"Mazer — {request.maze_type.value} · "
+                                            f"{request.algorithm.value} {request.width}×{request.height}"
+                                        )
+                                    except MazeGenerationError:
+                                        menu_state.set_generation_error()
+                                        open_ = True
+                                if not open_:
+                                    menu_state = None
+                                    menu_layout = None
+
+                # ---- Normal gameplay ----------------------------------------
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         running = False
+                    elif event.key == pygame.K_m:
+                        menu_state = MenuState(request)
+                        menu_layout = None
                     elif event.key == pygame.K_h:
                         show_heatmap = not show_heatmap
                     elif event.key == pygame.K_s:
@@ -404,6 +488,8 @@ def main(argv: list[str] | None = None) -> None:
             if solved:
                 _draw_solved_overlay(screen, renderer.maze_rect(cells), big_font, hud_font)
             _draw_hud(screen, hud_font, request, show_heatmap, show_solution, solved)
+            if menu_state is not None:
+                menu_layout = draw_menu(screen, menu_state, hud_font)
 
             pygame.display.flip()
             clock.tick(60)

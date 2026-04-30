@@ -64,6 +64,12 @@ from mazer.ui.renderer import (
 
 HUD_HEIGHT = 56
 
+# Minimum window size that ensures the settings menu panel (460 px wide,
+# ~338 px tall + HUD) is fully visible.  Windows narrower or shorter than
+# this are temporarily enlarged when the menu opens and restored on close.
+_MENU_MIN_WINDOW_W = 500
+_MENU_MIN_WINDOW_H = 450
+
 # Per-maze-type defaults. Tuple of (cell_size, width, height) — the
 # default algorithm is RecursiveBacktracker for all types because it
 # produces winding paths that show off the heatmap and solution-path
@@ -409,20 +415,18 @@ def main(argv: list[str] | None = None) -> None:
 
     menu_state: MenuState | None = None
     menu_layout: MenuLayout | None = None
+    # Window size saved just before the menu opens; restored if the user
+    # cancels.  None when the menu is not open (or when the window was
+    # already large enough and no resize was needed).
+    pre_menu_size: tuple[int, int] | None = None
 
-    def _commit_menu_result(
-        open_: bool,
-        new_request,
-    ) -> tuple[bool, object, object, int, pygame.Surface]:
+    def _commit_menu_result(open_: bool, new_request) -> None:
         """Apply a menu result to the running game state.
 
-        Returns ``(menu_still_open, maze, renderer, cell_size, screen)``.
-        Non-local bindings (maze, renderer, etc.) are captured by reference
-        from the enclosing ``main`` scope via the ``nonlocal`` statement in
-        callers.
+        Mutates the enclosing ``main`` scope via ``nonlocal``.
         """
         nonlocal maze, renderer, cell_size, screen, request, key_map, gradient
-        nonlocal menu_state, menu_layout
+        nonlocal menu_state, menu_layout, pre_menu_size
         if not open_:
             if new_request is not None:
                 try:
@@ -443,10 +447,20 @@ def main(argv: list[str] | None = None) -> None:
                     menu_state.set_generation_error()
                     open_ = True
             if not open_:
+                # Menu is truly closing.  If we expanded the window to fit
+                # the menu panel and the user cancelled (no new maze was
+                # applied), shrink back to the original game window size.
+                if new_request is None and pre_menu_size is not None:
+                    if screen.get_size() != pre_menu_size:
+                        screen = pygame.display.set_mode(pre_menu_size)
+                        renderer = make_renderer(
+                            request.maze_type, screen, cell_size, offset=(0, HUD_HEIGHT)
+                        )
+                        renderer.set_gradient(gradient)
+                pre_menu_size = None
                 pygame.key.set_repeat(0)
                 menu_state = None
                 menu_layout = None
-        return open_
 
     try:
         running = True
@@ -480,6 +494,16 @@ def main(argv: list[str] | None = None) -> None:
                         menu_state = MenuState(request)
                         menu_layout = None
                         pygame.key.set_repeat(300, 60)
+                        # Enlarge the window if it's too small to show the
+                        # full menu panel, and remember the original size so
+                        # we can restore it if the user cancels.
+                        pre_menu_size = screen.get_size()
+                        need_w = max(screen.get_width(), _MENU_MIN_WINDOW_W)
+                        need_h = max(screen.get_height(), _MENU_MIN_WINDOW_H)
+                        if (need_w, need_h) != pre_menu_size:
+                            screen = pygame.display.set_mode((need_w, need_h))
+                        else:
+                            pre_menu_size = None  # no resize — nothing to restore
                     elif event.key == pygame.K_h:
                         show_heatmap = not show_heatmap
                     elif event.key == pygame.K_s:

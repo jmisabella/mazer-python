@@ -401,6 +401,79 @@ def test_solve_rhombic_maze_by_following_solution_path() -> None:
         assert final_active.coord == Coord(width - 1, height - 1)
 
 
+def test_solve_upsilon_maze_by_following_solution_path() -> None:
+    """Same path-walk pattern as the other solver tests, on an upsilon grid.
+
+    Upsilon mixes octagon cells ((col+row)%2==0, eight directions) and square
+    cells ((col+row)%2==1, four cardinal directions).  Both share the same
+    coord-delta convention — the direction name in ``cell.linked`` maps to
+    a straightforward (dx, dy) offset with no boundary-clamp ambiguity.
+
+    Coord offsets (all cells):
+      Up=(0,-1), Right=(1,0), Down=(0,1), Left=(-1,0),
+      UpperRight=(1,-1), LowerRight=(1,1), LowerLeft=(-1,1), UpperLeft=(-1,-1).
+    """
+    width, height = 8, 8
+    request = MazeRequest(
+        maze_type=MazeType.UPSILON,
+        width=width,
+        height=height,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0),
+        goal=Coord(width - 1, height - 1),
+    )
+
+    _UPSILON_OFFSETS = {
+        Direction.UP:          (0, -1),
+        Direction.RIGHT:       (1,  0),
+        Direction.DOWN:        (0,  1),
+        Direction.LEFT:        (-1, 0),
+        Direction.UPPER_RIGHT: (1, -1),
+        Direction.LOWER_RIGHT: (1,  1),
+        Direction.LOWER_LEFT:  (-1, 1),
+        Direction.UPPER_LEFT:  (-1, -1),
+    }
+
+    with Maze(request) as m:
+        visited: set[Coord] = set()
+        max_steps = width * height
+        for _ in range(max_steps):
+            cells = m.cells()
+            active = _active(cells)
+            visited.add(active.coord)
+            if active.is_goal:
+                break
+            by_coord = _by_coord(cells)
+            next_direction: Direction | None = None
+            for direction in active.linked:
+                offset = _UPSILON_OFFSETS.get(direction)
+                if offset is None:
+                    continue
+                dx, dy = offset
+                target = Coord(active.coord.x + dx, active.coord.y + dy)
+                neighbor = by_coord.get(target)
+                if (
+                    neighbor is not None
+                    and neighbor.on_solution_path
+                    and target not in visited
+                ):
+                    next_direction = direction
+                    break
+            assert next_direction is not None, (
+                f"no forward solution-path move from {active.coord}; "
+                f"linked={active.linked}, visited={visited}"
+            )
+            assert m.move(next_direction) is True, (
+                f"move {next_direction} from {active.coord} unexpectedly rejected"
+            )
+        else:  # pragma: no cover
+            pytest.fail(f"did not reach goal within {max_steps} moves")
+
+        final_active = _active(m.cells())
+        assert final_active.is_goal
+        assert final_active.coord == Coord(width - 1, height - 1)
+
+
 @pytest.mark.parametrize("algorithm", list(Algorithm))
 def test_multiple_algorithms_all_produce_valid_mazes(algorithm: Algorithm) -> None:
     """Every algorithm produces a solvable Orthogonal maze.

@@ -8,7 +8,8 @@ and ``Layout/MazeCellAppearance.swift``):
   ``cell_size // 6`` at ``cell_size >= 18`` and ``cell_size // 7`` below;
   for delta ``cell_size / 10 * 1.15`` at ``cell_size >= 28`` else
   ``cell_size / 12 * 1.15``; for rhombic ``cell_size / 7`` at
-  ``cell_size >= 18`` else ``cell_size / 4.8``
+  ``cell_size >= 18`` else ``cell_size / 4.8``; for upsilon
+  ``cell_size / 12`` at ``cell_size >= 28`` else ``cell_size / 16``
   (denominators from ``wallStrokeWidth(for:cellSize:)``).
 * Heatmap default is the "Belize Hole" 10-shade gradient from
   ``HeatMapPalette.swift``; index = ``min(9, distance * 10 / max_distance)``.
@@ -21,8 +22,7 @@ and ``Layout/MazeCellAppearance.swift``):
 Dispatch:
     All renderer classes expose ``draw(cells, show_heatmap, show_solution)``
     and ``maze_rect(cells)``. The app picks the right one for a maze via
-    :func:`make_renderer`. Orthogonal, Sigma, Delta, and Rhombic are
-    implemented; Upsilon raises ``NotImplementedError`` from the factory.
+    :func:`make_renderer`. All five maze types are implemented.
 
 Hex layout (Sigma):
     Flat-top hexagons in odd-q vertical offset, ported from the iOS
@@ -67,6 +67,32 @@ Diamond layout (Rhombic):
 
     Container: ``half_diagonal * max_x + box`` wide,
     ``half_diagonal * max_y + box`` tall.
+
+Upsilon layout (octagon + square mix):
+    Alternating octagon and square cells. ``is_square`` is True when
+    ``(col + row) % 2 == 1`` (checkerboard pattern). ``squareSize``
+    = ``cell_size * (sqrt(2) - 1)`` (from iOS ``MazeLayoutMetrics.swift``).
+    Both cell types share the same center-to-center step:
+    ``step = cell_size * sqrt(2) / 2``. Cell (col, row) center:
+    ``cx = col * step + cell_size/2``, ``cy = row * step + cell_size/2``.
+
+    Octagon vertices (r = cell_size/2, k = 2r/(2+sqrt(2))), centered at (cx, cy)::
+
+        0: (cx-r+k, cy-r)   1: (cx+r-k, cy-r)
+        7: (cx-r, cy-r+k)                       2: (cx+r, cy-r+k)
+        6: (cx-r, cy+r-k)                       3: (cx+r, cy+r-k)
+        5: (cx-r+k, cy+r)   4: (cx+r-k, cy+r)
+
+    Direction → edge for octagon (ported from ``UpsilonCellView.swift``):
+      Up=(0,1), UpperRight=(1,2), Right=(2,3), LowerRight=(3,4),
+      Down=(4,5), LowerLeft=(5,6), Left=(6,7), UpperLeft=(7,0).
+
+    Square vertices (side = squareSize, centered at (cx, cy)):
+      0: top-left, 1: top-right, 2: bottom-right, 3: bottom-left.
+    Direction → edge for square: Up=(0,1), Right=(1,2), Down=(2,3), Left=(3,0).
+
+    Container: ``(cols-1) * step + cell_size`` wide,
+    ``(rows-1) * step + cell_size`` tall.
 """
 
 from __future__ import annotations
@@ -1138,6 +1164,255 @@ class RhombicRenderer:
         self.surface.blit(text, text.get_rect(center=center))
 
 
+# --- Upsilon (octagon + square) -------------------------------------------
+
+# Eight-direction coord offsets for Upsilon. Both octagons and squares share
+# the same coordinate system; squares simply never link diagonally.
+UPSILON_OFFSETS: dict[Direction, tuple[int, int]] = {
+    Direction.UP:          (0, -1),
+    Direction.RIGHT:       (1,  0),
+    Direction.DOWN:        (0,  1),
+    Direction.LEFT:        (-1, 0),
+    Direction.UPPER_RIGHT: (1, -1),
+    Direction.LOWER_RIGHT: (1,  1),
+    Direction.LOWER_LEFT:  (-1, 1),
+    Direction.UPPER_LEFT:  (-1, -1),
+}
+
+_UPSILON_OFFSET_TO_DIR: dict[tuple[int, int], Direction] = {
+    v: k for k, v in UPSILON_OFFSETS.items()
+}
+
+# Octagon edge list: (direction, vertex_i, vertex_j).  Ported from
+# UpsilonCellView.swift WallView body (octagon branch).
+_OCTAGON_EDGES: tuple[tuple[Direction, int, int], ...] = (
+    (Direction.UP,          0, 1),
+    (Direction.UPPER_RIGHT, 1, 2),
+    (Direction.RIGHT,       2, 3),
+    (Direction.LOWER_RIGHT, 3, 4),
+    (Direction.DOWN,        4, 5),
+    (Direction.LOWER_LEFT,  5, 6),
+    (Direction.LEFT,        6, 7),
+    (Direction.UPPER_LEFT,  7, 0),
+)
+
+# Square edge list: (direction, vertex_i, vertex_j).
+_SQUARE_EDGES: tuple[tuple[Direction, int, int], ...] = (
+    (Direction.UP,    0, 1),
+    (Direction.RIGHT, 1, 2),
+    (Direction.DOWN,  2, 3),
+    (Direction.LEFT,  3, 0),
+)
+
+
+def upsilon_direction(active: Cell, target: Coord) -> Direction | None:
+    """Find the direction in ``active.linked`` that connects to ``target``.
+
+    Upsilon coord deltas are unambiguous (no boundary-clamp issue, unlike
+    Sigma). Squares only link cardinally; octagons may link in all eight
+    directions. Returns ``None`` if target is not a linked neighbor.
+    """
+    dx, dy = target.x - active.coord.x, target.y - active.coord.y
+    direction = _UPSILON_OFFSET_TO_DIR.get((dx, dy))
+    if direction is None or direction not in active.linked:
+        return None
+    return direction
+
+
+class UpsilonRenderer:
+    """Renders an upsilon (octagon + square alternating) maze onto a Pygame surface.
+
+    Each grid position holds either an octagon (``(col+row) % 2 == 0``) or a
+    square (``(col+row) % 2 == 1``). Both share the same center-to-center
+    step ``cell_size * sqrt(2) / 2``, matching the iOS ``LazyVGrid`` layout
+    (horizontal spacing ``-(octagonSize - squareSize) / 2``, frame height
+    ``octagonSize * sqrt(2) / 2``).  The octagon overflows its frame slot
+    vertically by ~14.6% of cell_size; adjacent-row octagons share that
+    overlap, which is why iOS uses ``verticalSpacing = -1`` (sub-pixel).
+
+    Ported from ``UpsilonCellView.swift`` / ``UpsilonMazeView.swift`` with
+    geometry from ``MazeLayoutMetrics.swift``.
+    """
+
+    def __init__(
+        self,
+        surface: pygame.Surface,
+        cell_size: int,
+        offset: tuple[int, int] = (0, 0),
+        palette=HEATMAP_BELIZE_HOLE,
+    ) -> None:
+        self.surface = surface
+        self.cell_size = cell_size
+        self.offset_x, self.offset_y = offset
+        self.palette = palette
+        # squareSize from MazeLayoutMetrics: octagonSize * (sqrt(2) - 1)
+        self.square_size = cell_size * (_SQRT2 - 1)
+        # Center-to-center distance between adjacent cells (H and V).
+        self.step = cell_size * _SQRT2 / 2
+        # Octagon geometry: r = half cell_size, k = 2r / (2 + sqrt(2)).
+        r = cell_size / 2
+        self._r = r
+        self._k = 2.0 * r / (2.0 + _SQRT2)
+        # Wall stroke from iOS wallStrokeWidth(for:.upsilon): denom 12 at >=28, else 16.
+        denom = 12 if cell_size >= 28 else 16
+        self.wall_width = max(1, int(round(cell_size / denom)))
+        self._marker_font = pygame.font.SysFont(None, max(14, int(cell_size * 0.9)))
+        self.gradient: GradientTheme | None = None
+
+    def set_gradient(self, gradient: GradientTheme | None) -> None:
+        self.gradient = gradient
+
+    def maze_rect(self, cells: list[Cell]) -> pygame.Rect:
+        cols = max(c.coord.x for c in cells) + 1
+        rows = max(c.coord.y for c in cells) + 1
+        w = int(round((cols - 1) * self.step + self.cell_size))
+        h = int(round((rows - 1) * self.step + self.cell_size))
+        return pygame.Rect(self.offset_x, self.offset_y, w, h)
+
+    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool) -> None:
+        if not cells:
+            return
+        max_distance = max(c.distance for c in cells)
+        total_rows = max(c.coord.y for c in cells) + 1
+        bbox = self.maze_rect(cells)
+        bg = self.gradient.base if self.gradient is not None else OFF_WHITE
+        pygame.draw.rect(self.surface, bg, bbox)
+        for cell in cells:
+            self._draw_cell(cell, max_distance, total_rows, show_heatmap, show_solution)
+        pygame.draw.rect(self.surface, BORDER_COLOR, bbox, BORDER_WIDTH)
+
+    def cell_at(self, pos: tuple[int, int], cells: list[Cell]) -> Coord | None:
+        """Pixel → grid coord. Returns ``None`` if the click missed all cells.
+
+        Two-pass: closest center then point-in-polygon. The polygon check
+        is essential because the octagon fill overflows its step-box and
+        closest-center alone would mis-assign clicks in the overlap band.
+        """
+        if not self.maze_rect(cells).collidepoint(pos):
+            return None
+        px, py = pos
+        best: Coord | None = None
+        best_dist_sq = float("inf")
+        for cell in cells:
+            cx, cy = self._cell_center(cell.coord.x, cell.coord.y)
+            d = (cx - px) ** 2 + (cy - py) ** 2
+            if d < best_dist_sq:
+                best_dist_sq = d
+                best = cell.coord
+        if best is None:
+            return None
+        if not _point_in_polygon((px, py), self._cell_polygon(best.x, best.y)):
+            return None
+        return best
+
+    def _cell_center(self, col: int, row: int) -> tuple[float, float]:
+        return (
+            self.offset_x + col * self.step + self.cell_size / 2,
+            self.offset_y + row * self.step + self.cell_size / 2,
+        )
+
+    def _octagon_points(self, cx: float, cy: float) -> list[tuple[float, float]]:
+        r, k = self._r, self._k
+        return [
+            (cx - r + k, cy - r),   # 0: top-left of top edge
+            (cx + r - k, cy - r),   # 1: top-right of top edge
+            (cx + r,     cy - r + k),  # 2: right-top
+            (cx + r,     cy + r - k),  # 3: right-bottom
+            (cx + r - k, cy + r),   # 4: bottom-right of bottom edge
+            (cx - r + k, cy + r),   # 5: bottom-left of bottom edge
+            (cx - r,     cy + r - k),  # 6: left-bottom
+            (cx - r,     cy - r + k),  # 7: left-top
+        ]
+
+    def _square_points(self, cx: float, cy: float) -> list[tuple[float, float]]:
+        s = self.square_size / 2
+        return [
+            (cx - s, cy - s),  # 0: top-left
+            (cx + s, cy - s),  # 1: top-right
+            (cx + s, cy + s),  # 2: bottom-right
+            (cx - s, cy + s),  # 3: bottom-left
+        ]
+
+    def _cell_polygon(self, col: int, row: int) -> list[tuple[float, float]]:
+        cx, cy = self._cell_center(col, row)
+        if (col + row) % 2 == 1:
+            return self._square_points(cx, cy)
+        return self._octagon_points(cx, cy)
+
+    def _draw_cell(
+        self,
+        cell: Cell,
+        max_distance: int,
+        total_rows: int,
+        show_heatmap: bool,
+        show_solution: bool,
+    ) -> None:
+        col, row = cell.coord.x, cell.coord.y
+        is_sq = (col + row) % 2 == 1
+        cx, cy = self._cell_center(col, row)
+        center_int = (int(round(cx)), int(round(cy)))
+
+        polygon = self._cell_polygon(col, row)
+        pygame.draw.polygon(
+            self.surface,
+            cell_color(
+                cell, max_distance, total_rows, show_heatmap, show_solution,
+                self.palette, self.gradient,
+            ),
+            polygon,
+        )
+
+        w = self.wall_width
+        if is_sq:
+            pts = self._square_points(cx, cy)
+            for direction, i, j in _SQUARE_EDGES:
+                if direction not in cell.linked:
+                    pygame.draw.line(self.surface, WALL_COLOR, pts[i], pts[j], w)
+        else:
+            pts = self._octagon_points(cx, cy)
+            for direction, i, j in _OCTAGON_EDGES:
+                if direction not in cell.linked:
+                    pygame.draw.line(self.surface, WALL_COLOR, pts[i], pts[j], w)
+
+        if cell.is_active:
+            radius = max(3, self.cell_size // 4)
+            pygame.draw.circle(self.surface, ACTIVE_MARKER_COLOR, center_int, radius)
+            pygame.draw.circle(self.surface, WALL_COLOR, center_int, radius, max(1, w // 2))
+            self._draw_open_exit_dots(cell, (cx, cy), is_sq)
+
+    def _draw_open_exit_dots(
+        self,
+        cell: Cell,
+        center: tuple[float, float],
+        is_sq: bool,
+    ) -> None:
+        cx, cy = center
+        dot_radius = max(2, self.cell_size // 12)
+        outline = max(1, dot_radius // 2)
+        if is_sq:
+            pts = self._square_points(cx, cy)
+            edge_midpoints = {
+                d: ((pts[i][0] + pts[j][0]) / 2, (pts[i][1] + pts[j][1]) / 2)
+                for d, i, j in _SQUARE_EDGES
+            }
+        else:
+            pts = self._octagon_points(cx, cy)
+            edge_midpoints = {
+                d: ((pts[i][0] + pts[j][0]) / 2, (pts[i][1] + pts[j][1]) / 2)
+                for d, i, j in _OCTAGON_EDGES
+            }
+        for direction, (mx, my) in edge_midpoints.items():
+            if direction not in cell.linked:
+                continue
+            pos = (cx + 0.6 * (mx - cx), cy + 0.6 * (my - cy))
+            pygame.draw.circle(self.surface, OPEN_EXIT_DOT_COLOR, pos, dot_radius)
+            pygame.draw.circle(self.surface, WALL_COLOR, pos, dot_radius, outline)
+
+    def _draw_letter(self, center: tuple[int, int], letter: str) -> None:
+        text = self._marker_font.render(letter, True, LETTER_COLOR)
+        self.surface.blit(text, text.get_rect(center=center))
+
+
 # --- Dispatch -------------------------------------------------------------
 
 
@@ -1161,7 +1436,9 @@ def make_renderer(
         return DeltaRenderer(surface, cell_size, offset=offset, palette=palette)
     if maze_type == MazeType.RHOMBIC:
         return RhombicRenderer(surface, cell_size, offset=offset, palette=palette)
-    raise NotImplementedError(f"No renderer implemented for {maze_type.value} (Orthogonal, Sigma, Delta, Rhombic supported)")
+    if maze_type == MazeType.UPSILON:
+        return UpsilonRenderer(surface, cell_size, offset=offset, palette=palette)
+    raise NotImplementedError(f"No renderer implemented for {maze_type.value}")
 
 
 # Back-compat: existing callers still reference ``Renderer`` for the
@@ -1180,6 +1457,8 @@ __all__ = [
     "Renderer",
     "RhombicRenderer",
     "SigmaRenderer",
+    "UPSILON_OFFSETS",
+    "UpsilonRenderer",
     "build_sigma_linked_pairs",
     "cell_color",
     "delta_direction",
@@ -1190,4 +1469,5 @@ __all__ = [
     "orthogonal_direction",
     "rhombic_direction",
     "sigma_direction",
+    "upsilon_direction",
 ]

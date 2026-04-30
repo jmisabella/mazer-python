@@ -11,6 +11,7 @@ CLI:
     python -m mazer --type sigma        # hexagonal grid
     python -m mazer --type delta        # triangular grid
     python -m mazer --type rhombic      # 45°-rotated diamond grid
+    python -m mazer --type upsilon      # octagon + square grid
     python -m mazer --type sigma --width 13 --height 11 --algo HuntAndKill
 
 Movement input (works for every maze type):
@@ -38,6 +39,13 @@ Sigma/Delta also keep the legacy "hex roguelike" key layout for muscle memory:
 Rhombic uses the four diagonal keys only (no UP/DOWN cardinals):
     Q                UPPER_LEFT     E                UPPER_RIGHT
     Z                LOWER_LEFT     C                LOWER_RIGHT
+
+Upsilon uses the same eight-way layout as Sigma (octagons connect in all
+eight directions; squares use the cardinal subset, resolved by the Rust):
+    W                UP             Q                UPPER_LEFT
+    X                DOWN           E                UPPER_RIGHT
+                                    Z                LOWER_LEFT
+                                    C                LOWER_RIGHT
 
 Common keys:
     H                Toggle heatmap overlay
@@ -93,6 +101,8 @@ _DEFAULTS: dict[MazeType, tuple[int, int, int]] = {
     MazeType.SIGMA: (26, 11, 10),
     MazeType.DELTA: (30, 20, 12),
     MazeType.RHOMBIC: (36, 11, 11),
+    # Upsilon: cell_size=40 gives step≈28px; 10×10 produces a ~295×295 maze.
+    MazeType.UPSILON: (40, 10, 10),
 }
 
 ORTHOGONAL_KEYS: dict[int, Direction] = {
@@ -148,11 +158,17 @@ RHOMBIC_KEYS: dict[int, Direction] = {
     pygame.K_c: Direction.LOWER_RIGHT,
 }
 
+# Upsilon has octagons (8 directions) and squares (4 cardinal directions).
+# Use the full eight-way layout; the Rust make_move handles the square cells'
+# diagonal inputs by falling back to the cardinal component (Up → Up, etc.).
+UPSILON_KEYS: dict[int, Direction] = SIGMA_KEYS
+
 _KEYS_BY_TYPE: dict[MazeType, dict[int, Direction]] = {
     MazeType.ORTHOGONAL: ORTHOGONAL_KEYS,
     MazeType.SIGMA: SIGMA_KEYS,
     MazeType.DELTA: DELTA_KEYS,
     MazeType.RHOMBIC: RHOMBIC_KEYS,
+    MazeType.UPSILON: UPSILON_KEYS,
 }
 
 ARROW_KEYS: tuple[int, ...] = (pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT)
@@ -162,6 +178,7 @@ _HUD_HINT_BY_TYPE: dict[MazeType, str] = {
     MazeType.SIGMA: "chords / W·Q·E·Z·X·C / drag/click",
     MazeType.DELTA: "chords / W·Q·E·Z·X·C / drag/click",
     MazeType.RHOMBIC: "Q·E·Z·C diagonals + chords + drag/click",
+    MazeType.UPSILON: "chords / W·Q·E·Z·X·C / drag/click",
 }
 
 
@@ -333,7 +350,7 @@ def _direction_from_vector(dx: float, dy: float, maze_type: MazeType) -> Directi
     if dx == 0 and dy == 0:
         return None
     angle = (math.degrees(math.atan2(dy, dx)) + 360) % 360
-    if maze_type in (MazeType.ORTHOGONAL, MazeType.DELTA):
+    if maze_type in (MazeType.ORTHOGONAL, MazeType.DELTA, MazeType.UPSILON):
         sector = int((angle + 22.5) / 45) % 8
         return _ORTHO_SECTOR_DIRECTIONS[sector]
     if maze_type == MazeType.SIGMA:
@@ -404,9 +421,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--type",
         dest="maze_type",
-        choices=[m.value.lower() for m in (MazeType.ORTHOGONAL, MazeType.SIGMA, MazeType.DELTA, MazeType.RHOMBIC)],
+        choices=[m.value.lower() for m in (MazeType.ORTHOGONAL, MazeType.SIGMA, MazeType.DELTA, MazeType.RHOMBIC, MazeType.UPSILON)],
         default=MazeType.ORTHOGONAL.value.lower(),
-        help="Maze type: orthogonal (default), sigma (hex), delta (triangular), or rhombic (diamond).",
+        help="Maze type: orthogonal (default), sigma (hex), delta (triangular), rhombic (diamond), or upsilon (octagon+square).",
     )
     parser.add_argument("--width", type=int, default=None, help="Grid width (cells). Default depends on type.")
     parser.add_argument("--height", type=int, default=None, help="Grid height (cells). Default depends on type.")
@@ -467,6 +484,11 @@ def _window_size(request: MazeRequest, cell_size: int) -> tuple[int, int]:
         half_diagonal = diagonal / 2
         w = int(round(half_diagonal * (request.width - 1) + diagonal))
         h = int(round(half_diagonal * (request.height - 1) + diagonal)) + HUD_HEIGHT
+        return (w, h)
+    if request.maze_type == MazeType.UPSILON:
+        step = cell_size * math.sqrt(2) / 2
+        w = int(round((request.width - 1) * step + cell_size))
+        h = int(round((request.height - 1) * step + cell_size)) + HUD_HEIGHT
         return (w, h)
     raise NotImplementedError(f"window sizing for {request.maze_type.value}")
 

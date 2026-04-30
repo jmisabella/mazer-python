@@ -554,7 +554,7 @@ Reference: `RhombicCellView.swift`, `RhombicMazeView.swift`. Pay attention to `C
 
 Verified: 107 passed, 1 skipped (was 98 + 0 before this session). App smoke test under `SDL_VIDEODRIVER=dummy` with Q/E/Z/C keys + H/S/R exits cleanly.
 
-## SESSION 14 [uncompleted]
+## SESSION 14 [completed 2026-04-30]
 ### Stage 13 — Upsilon (octagon + square) grid rendering and play
 
 Add full support for the Upsilon maze type: rendering, key mapping, hit-testing, and integration test.
@@ -567,3 +567,40 @@ Scope:
 5. **Tests**: solver integration test + renderer smoke test + `cell_at` test covering both cell shapes.
 
 Reference: `UpsilonCellView.swift`, `UpsilonMazeView.swift`, `UpsilonMazeView.swift`. Note `is_square` and `orientation` on the `Cell` dataclass — they were added in Stage 3 for exactly this purpose.
+
+#### Session 14 notes
+
+**Cell type rule**: `is_square` when `(col + row) % 2 == 1` (from Rust `initialize_upsilon_cells`: `row % 2 != col % 2`). This is the standard checkerboard where octagons sit at even-sum positions and squares at odd-sum.
+
+**Geometry** from `UpsilonCellView.swift` / `UpsilonMazeView.swift` / `MazeLayoutMetrics.swift` (ported field-for-field):
+- `squareSize = octagonSize * (sqrt(2) - 1)` — from `computeCellSizes`
+- `step = octagonSize * sqrt(2) / 2` = `(octagonSize + squareSize) / 2` — derived from iOS LazyVGrid horizontal spacing `-(octagonSize - squareSize) / 2` and frame width `octagonSize`; same value applies vertically (frame height `octagonSize * sqrt(2) / 2`, minus the sub-pixel `-1` spacing)
+- Cell center: `cx = col * step + octagonSize/2`, `cy = row * step + octagonSize/2`
+- Bounding box: `(cols-1)*step + octagonSize` × `(rows-1)*step + octagonSize`
+- Octagon: r = octagonSize/2, k = 2r/(2+sqrt(2)); 8 vertices centered at (cx, cy) in the order described in `OctagonShape.path(in:)`
+- Square: side `squareSize`, centered at (cx, cy); vertices at ±squareSize/2 in both axes
+- Wall stroke: denominator 12 at `cell_size >= 28`, else 16 (from `wallStrokeWidth(for:.upsilon)`)
+
+**Direction → edge** (from `WallView` in `UpsilonCellView.swift`):
+- Octagon: Up=(0,1), UpperRight=(1,2), Right=(2,3), LowerRight=(3,4), Down=(4,5), LowerLeft=(5,6), Left=(6,7), UpperLeft=(7,0)
+- Square: Up=(0,1), Right=(1,2), Down=(2,3), Left=(3,0) — cardinal only
+
+**No boundary-clamp ambiguity**: Unlike Sigma, Upsilon neighbor assignment (`assign_neighbors_upsilon`) uses unambiguous deltas per direction for both cell types. The `upsilon_direction` helper uses a simple reverse-map of `UPSILON_OFFSETS` — no candidate-offset iteration needed.
+
+**Direction→offset for both cell types**: Up=(0,-1), Right=(1,0), Down=(0,1), Left=(-1,0), UpperRight=(1,-1), LowerRight=(1,1), LowerLeft=(-1,1), UpperLeft=(-1,-1). Squares simply never have diagonal links, but the offset table is the same.
+
+**Key map**: `UPSILON_KEYS = SIGMA_KEYS` (W/X/Q/E/Z/C + arrow chords). Octagons have all 8 directions; sending a diagonal key to a square cell goes to the Rust `make_move` which tries the diagonal (not a neighbor) then falls back to the cardinal component — producing the same "corner rounding" feel as orthogonal's slide alts.
+
+**Drag sectors**: 8 sectors (same as orthogonal/delta) — added `MazeType.UPSILON` to the `if maze_type in (MazeType.ORTHOGONAL, MazeType.DELTA)` branch in `_direction_from_vector`.
+
+**No `_move_with_slide` special case**: Standard `_SLIDE_ALTS` applies. For square cells, diagonal slide alts fall back to cardinals via the Rust — same implicit behavior as orthogonal square cells getting a diagonal chord.
+
+**App defaults**: `_DEFAULTS[UPSILON] = (40, 10, 10)` — cell_size 40 gives step ≈ 28px; 10×10 produces a ~295×295 painted region (comparable to the other maze types at their defaults). Goal = (9,9); no parity constraint needed since all cells exist.
+
+**Menu**: `MazeType.UPSILON` added to `MenuState.SUPPORTED_TYPES`.
+
+**`cell_at` hit-testing**: Closest-center + point-in-polygon (same two-pass pattern as Sigma/Delta). The octagon overflows its step-box vertically by ~14.6% of cell_size (because `r = octagonSize/2 > step/2 = octagonSize*sqrt(2)/4`), so adjacent-row octagons physically overlap; the closest-center pass assigns the click to the nearer cell, and the polygon check verifies it's inside the correct shape.
+
+**Tests** (5 new): `test_upsilon_renderer_draws_without_error` (smoke, both heatmap on/off), `test_upsilon_cell_at_resolves_clicks` (octagon and square cells + out-of-bounds), updated `test_make_renderer_dispatch` (Upsilon now returns `UpsilonRenderer` instead of raising), `test_solve_upsilon_maze_by_following_solution_path` (integration).
+
+Verified: 110 passed, 1 skipped (was 107 + 0 before this session). App smoke test under `SDL_VIDEODRIVER=dummy` with H/S/R/Esc exits cleanly. Full suite ~0.51s.

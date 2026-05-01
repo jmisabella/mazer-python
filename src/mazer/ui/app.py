@@ -587,7 +587,7 @@ def _draw_solved_overlay(
     text = big_font.render("Solved!", True, SOLVED_TEXT_COLOR)
     text_rect = text.get_rect(center=rect.center)
     surface.blit(text, text_rect)
-    hint = hint_font.render("Press R for a new maze", True, SOLVED_TEXT_COLOR)
+    hint = hint_font.render("Press R / Space / Enter for a new maze", True, SOLVED_TEXT_COLOR)
     surface.blit(hint, hint.get_rect(midtop=(rect.centerx, text_rect.bottom + 8)))
 
 
@@ -688,6 +688,8 @@ def main(argv: list[str] | None = None) -> None:
                         f"Mazer — {request.maze_type.value} · "
                         f"{request.algorithm.value} {request.width}×{request.height}"
                     )
+                    if animate_mode:
+                        _begin_animation()
                 except MazeGenerationError:
                     menu_state.set_generation_error()
                     open_ = True

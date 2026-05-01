@@ -604,3 +604,40 @@ Reference: `UpsilonCellView.swift`, `UpsilonMazeView.swift`, `UpsilonMazeView.sw
 **Tests** (5 new): `test_upsilon_renderer_draws_without_error` (smoke, both heatmap on/off), `test_upsilon_cell_at_resolves_clicks` (octagon and square cells + out-of-bounds), updated `test_make_renderer_dispatch` (Upsilon now returns `UpsilonRenderer` instead of raising), `test_solve_upsilon_maze_by_following_solution_path` (integration).
 
 Verified: 110 passed, 1 skipped (was 107 + 0 before this session). App smoke test under `SDL_VIDEODRIVER=dummy` with H/S/R/Esc exits cleanly. Full suite ~0.51s.
+
+## SESSION 15 [uncompleted]
+### Stage 14 — Maze generation animation
+
+Add an in-game option to animate maze generation step-by-step, matching the iOS `MazeGenerationAnimationView` behavior.
+
+Reference: `.planning/referenced_resources/iOS_app/mazer-ios/Views/MazeGenerationAnimationView.swift`.
+
+**How it works in iOS**: When triggered, the app generates with `capture_steps: true`, receives an array of cell-state snapshots, then renders each snapshot through the normal maze view at 15ms per frame. The animation plays to completion and then the final interactive maze is shown. A cancel button (×) skips the animation and jumps to the final state immediately.
+
+**Python scope**:
+
+1. **`G` key toggles "animate next generation"** mode. The HUD shows a visual indicator when the mode is active (e.g. `A anim:on`). The toggle is sticky — it persists until the user presses `G` again, so subsequent `R`/`N` regenerations also animate.
+
+2. **Triggering animation**: When animation mode is on and the user presses `R`/`N` (or first launch with a `--animate` CLI flag), generate the maze with `capture_steps=True` and enter an animation loop instead of the normal interactive loop:
+    - Use `maze.generation_steps()` which lazily yields `list[Cell]` per step.
+    - Preload all steps into a list up front (the steps are already computed by the Rust; `generation_steps()` just copies them from FFI memory into Python objects one by one). Do this once at animation start, not per frame.
+    - Draw each step's cell list through the existing renderer at the normal 60fps tick, advancing one step every `ANIM_STEP_INTERVAL_MS = 15` ms. At 60fps each frame is ~16ms, so advance one step per frame; if the interval is ever shorter use the clock's elapsed time to advance multiple steps at once.
+    - During animation, H/S overlays still work (toggle them and they apply to the current frame on the next draw).
+    - `Space`/`Enter`/mouse-click skips to the final state immediately (jumps to the last step and transitions to normal play). `Esc` cancels and goes back to the previous interactive maze (does **not** quit). Arrow keys and gameplay movement are ignored during animation.
+    - After the last step completes normally, play a brief "done" visual cue (flash the border green for one frame, or just transition to normal play — keep it simple).
+
+3. **State machine in `app.py`**: Add an `AnimationState` dataclass (or a few plain variables) alongside the existing game-loop state. The main loop already has precedence tiers (menu > solved > gameplay); add `animation` as the next tier above gameplay. During animation the event handling is simplified: only Space/Enter/click (skip), G (re-toggle), Esc (cancel), H, S, and QUIT are processed.
+
+4. **`--animate` CLI flag** (optional, boolean): if present, animate the first maze automatically on launch.
+
+5. **No changes needed to the Rust FFI, `Maze` wrapper, or renderers.** `Maze.generation_steps()` already exists (Stage 3) and already yields `list[Cell]` per step. The renderers already render any `list[Cell]` correctly — generation step cells include `is_visited`, `is_active`, `is_start`, `is_goal` fields so the heatmap and solution overlays work naturally during playback (though solution path isn't computed mid-generation, so `on_solution_path` will be False for all intermediate frames, which is correct).
+
+6. **Performance note**: For a 20×20 orthogonal maze, `generation_steps()` yields up to 400 steps × ~400 cells = 160 k Python Cell objects. Pre-loading them all takes ~0.05s and fits comfortably in memory. No streaming required.
+
+**Palette during animation**: iOS uses `wetAsphaltPalette` (a dark blue-gray) during animation regardless of the user's gradient choice. Python equivalent: during animation, call `renderer.set_gradient(None)` so cells fall through to the OFF_WHITE row-gradient default (no random color burst mid-animation). Restore the gradient after animation ends.
+
+**Tests**:
+- `tests/test_ui.py`: `test_animation_steps_advance_per_frame` — construct an `AnimationState` with a known step list, call `tick(elapsed_ms)` three times, assert `current_step` advances correctly. `test_animation_skip_jumps_to_last` — call `skip()`, assert `current_step == len(steps) - 1` and `done == True`.
+- No new integration tests needed — generation steps are already exercised in `test_maze.py`.
+
+**Acceptance**: `G` during play shows `anim:on` in HUD. `R` generates a new maze and animates it step-by-step, all five maze types. Space skips to the final playable maze. `G` again disables animation for the next `R`.

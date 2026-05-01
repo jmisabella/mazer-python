@@ -256,6 +256,12 @@ class MenuState:
         """Build and return a MazeRequest unconditionally (section check bypassed)."""
         maze_type = self.SUPPORTED_TYPES[self.type_idx]
         algorithm = self.ALGORITHMS[self.algo_idx]
+        # Rhombic only has (x+y)%2==0 cells; nudge the goal by one when the
+        # menu dimensions place it on a non-existent odd-sum coord.  Mirrors
+        # the same guard applied by app._build_request for CLI args.
+        goal_x, goal_y = self.width - 1, self.height - 1
+        if maze_type == MazeType.RHOMBIC and (goal_x + goal_y) % 2 != 0:
+            goal_x = max(0, goal_x - 1)
         return False, MazeRequest(
             maze_type=maze_type,
             width=self.width,
@@ -263,7 +269,7 @@ class MenuState:
             algorithm=algorithm,
             capture_steps=False,
             start=Coord(x=0, y=0),
-            goal=Coord(x=self.width - 1, y=self.height - 1),
+            goal=Coord(x=goal_x, y=goal_y),
         )
 
     def _build_request(self) -> tuple[bool, MazeRequest | None]:

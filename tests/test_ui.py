@@ -1134,3 +1134,88 @@ def test_sigma_direction_lookup_returns_linked_name() -> None:
                 returned = sigma_direction(cell, target, cells)
                 assert returned is not None
                 assert returned in cell.linked
+
+
+# --- AnimationState unit tests ------------------------------------------
+
+
+def test_animation_steps_advance_per_frame() -> None:
+    """tick() advances current_step by elapsed_ms / ANIM_STEP_INTERVAL_MS."""
+    from mazer.ui.app import ANIM_STEP_INTERVAL_MS, AnimationState
+
+    steps = [[]] * 10
+    anim = AnimationState(steps)
+    assert anim.current_step == 0
+    assert not anim.done
+
+    # One interval → one step forward.
+    done = anim.tick(ANIM_STEP_INTERVAL_MS)
+    assert anim.current_step == 1
+    assert not done
+
+    # Two intervals at once → two steps forward.
+    done = anim.tick(ANIM_STEP_INTERVAL_MS * 2)
+    assert anim.current_step == 3
+    assert not done
+
+    # Sub-interval tick → no advancement (accumulated into next tick).
+    before = anim.current_step
+    anim.tick(ANIM_STEP_INTERVAL_MS * 0.5)
+    assert anim.current_step == before
+
+
+def test_animation_skip_jumps_to_last() -> None:
+    """skip() immediately marks done and sets current_step to the final index."""
+    from mazer.ui.app import AnimationState
+
+    steps = [[]] * 5
+    anim = AnimationState(steps)
+    anim.skip()
+    assert anim.current_step == len(steps) - 1
+    assert anim.done
+
+
+def test_animation_completes_at_last_step() -> None:
+    """tick() returns True exactly when the last step is reached."""
+    from mazer.ui.app import ANIM_STEP_INTERVAL_MS, AnimationState
+
+    steps = [[]] * 3  # steps 0, 1, 2
+    anim = AnimationState(steps)
+    # Advance past the end in one big tick — should clamp at last and return True.
+    done = anim.tick(ANIM_STEP_INTERVAL_MS * 100)
+    assert anim.current_step == len(steps) - 1
+    assert done
+    assert anim.done
+    # Subsequent ticks are no-ops.
+    done2 = anim.tick(ANIM_STEP_INTERVAL_MS)
+    assert not done2
+    assert anim.current_step == len(steps) - 1
+
+
+def test_animation_smoke_with_real_maze() -> None:
+    """AnimationState wraps a real generation_steps() sequence without error."""
+    from mazer.ui.app import ANIM_STEP_INTERVAL_MS, AnimationState
+    from mazer.types import Coord
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5,
+        height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        capture_steps=True,
+        start=Coord(0, 0),
+        goal=Coord(4, 4),
+    )
+    with Maze(request) as m:
+        all_steps = list(m.generation_steps())
+
+    assert len(all_steps) > 0
+    anim = AnimationState(all_steps)
+    assert not anim.done
+
+    # Advance until done.
+    for _ in range(len(all_steps) + 5):
+        if anim.tick(ANIM_STEP_INTERVAL_MS):
+            break
+    assert anim.done
+    assert anim.current_step == len(all_steps) - 1

@@ -13,6 +13,7 @@ CLI:
     python -m mazer --type rhombic      # 45°-rotated diamond grid
     python -m mazer --type upsilon      # octagon + square grid
     python -m mazer --type sigma --width 13 --height 11 --algo HuntAndKill
+    python -m mazer --animate           # animate first maze generation
 
 Movement input (works for every maze type):
     Single arrow keys → cardinal direction (UP/DOWN/LEFT/RIGHT).
@@ -50,9 +51,10 @@ eight directions; squares use the cardinal subset, resolved by the Rust):
 Common keys:
     H                Toggle heatmap overlay
     S                Toggle solution-path overlay
-    R / N            Regenerate with the current request (same params)
+    G                Toggle animate-generation mode (next R/N plays step-by-step)
+    R / N            Regenerate (animates if G mode is on)
     M                Open settings menu (change type, algorithm, size)
-    Esc              Quit (or close menu if menu is open).
+    Esc              Quit (cancel animation if animating; close menu if menu is open).
 
 Open-exit dots: the active cell shows small white dots near each open
 edge — affordance equivalent to the iOS D-pad's per-direction enabled
@@ -62,6 +64,7 @@ state. If a key seems "not to move you", check the dots.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import math
 
 import pygame
@@ -409,6 +412,47 @@ class _DragState:
         self._origin = None
 
 
+ANIM_STEP_INTERVAL_MS: float = 15.0
+
+
+class AnimationState:
+    """Step-by-step maze generation animation controller.
+
+    Pre-loads all generation steps; ``tick()`` advances by elapsed wall-clock
+    time and returns True when the last step is reached.  ``skip()`` jumps to
+    the final frame immediately, idempotent if already done.
+    """
+
+    def __init__(self, steps: list) -> None:
+        self.steps = steps
+        self.current_step: int = 0
+        self.done: bool = len(steps) == 0
+        self._accum_ms: float = 0.0
+
+    def tick(self, elapsed_ms: float) -> bool:
+        """Advance by *elapsed_ms*. Returns True when animation completes."""
+        if self.done or not self.steps:
+            self.done = True
+            return False
+        self._accum_ms += elapsed_ms
+        steps_to_advance = int(self._accum_ms / ANIM_STEP_INTERVAL_MS)
+        if steps_to_advance > 0:
+            self._accum_ms -= steps_to_advance * ANIM_STEP_INTERVAL_MS
+            self.current_step = min(
+                self.current_step + steps_to_advance, len(self.steps) - 1
+            )
+        if self.current_step >= len(self.steps) - 1:
+            self.done = True
+            return True
+        return False
+
+    def skip(self) -> None:
+        """Jump to the final step."""
+        if self.steps:
+            self.current_step = len(self.steps) - 1
+        self.done = True
+
+
 HUD_BG = OFF_WHITE
 HUD_TITLE_COLOR = (40, 40, 40)
 HUD_HINT_COLOR = (90, 90, 90)
@@ -431,6 +475,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--algo",
         default=Algorithm.RECURSIVE_BACKTRACKER.value,
         help=f"Generation algorithm. Default {Algorithm.RECURSIVE_BACKTRACKER.value}.",
+    )
+    parser.add_argument(
+        "--animate",
+        action="store_true",
+        default=False,
+        help="Animate maze generation on first launch.",
     )
     return parser.parse_args(argv)
 
@@ -504,17 +554,22 @@ def _draw_hud(
     show_heatmap: bool,
     show_solution: bool,
     solved: bool,
+    animate_mode: bool = False,
+    anim_info: str | None = None,
 ) -> None:
     pygame.draw.rect(surface, HUD_BG, pygame.Rect(0, 0, surface.get_width(), HUD_HEIGHT))
     title = f"{request.maze_type.value} · {request.algorithm.value}  {request.width}×{request.height}"
     move_hint = _HUD_HINT_BY_TYPE.get(request.maze_type, "")
-    hints = (
-        f"H heatmap:{'on' if show_heatmap else 'off'}    "
-        f"S solution:{'on' if show_solution else 'off'}    "
-        f"R regen    M settings    {move_hint}"
-    )
+    if anim_info is not None:
+        hint_text = anim_info
+    else:
+        hint_text = (
+            f"H heatmap:{'on' if show_heatmap else 'off'}    "
+            f"S solution:{'on' if show_solution else 'off'}    "
+            f"R regen    G anim:{'on' if animate_mode else 'off'}    M settings    {move_hint}"
+        )
     surface.blit(font.render(title, True, HUD_TITLE_COLOR), (12, 8))
-    surface.blit(font.render(hints, True, HUD_HINT_COLOR), (12, 30))
+    surface.blit(font.render(hint_text, True, HUD_HINT_COLOR), (12, 30))
     if solved:
         msg = font.render("Solved!", True, (16, 130, 60))
         surface.blit(msg, msg.get_rect(midright=(surface.get_width() - 12, HUD_HEIGHT // 2)))
@@ -596,6 +651,13 @@ def main(argv: list[str] | None = None) -> None:
     solved_btn_pressed: bool = False
     solved: bool = False  # pre-initialised so the event loop can read it on frame 0
 
+    # Sticky animation mode — toggled by G key.  When True, R/N and first
+    # launch with --animate generate with capture_steps=True and play the
+    # step-by-step animation before handing off to interactive play.
+    animate_mode: bool = args.animate
+    anim: AnimationState | None = None
+    anim_maze: Maze | None = None  # new maze being animated (kept separate for cancel)
+
     menu_state: MenuState | None = None
     menu_layout: MenuLayout | None = None
     # Window size saved just before the menu opens; restored if the user
@@ -646,6 +708,46 @@ def main(argv: list[str] | None = None) -> None:
                 menu_state = None
                 menu_layout = None
 
+    def _begin_animation() -> None:
+        """Start step-by-step animation for the current request."""
+        nonlocal anim, anim_maze, solved_btn_pressed
+        if anim_maze is not None:
+            anim_maze.close()
+        anim_request = dataclasses.replace(request, capture_steps=True)
+        anim_maze = Maze(anim_request)
+        all_steps = list(anim_maze.generation_steps())
+        anim = AnimationState(all_steps)
+        renderer.set_gradient(None)
+        drag.end()
+        arrows_consumed.clear()
+        solved_btn_pressed = False
+
+    def _complete_animation() -> None:
+        """Finish animation (normal end or skip) — switch to interactive play."""
+        nonlocal maze, anim, anim_maze, gradient
+        if anim is not None:
+            anim.skip()
+        maze.close()
+        maze = anim_maze
+        anim_maze = None
+        anim = None
+        gradient = generate_gradient(gradient.base)
+        renderer.set_gradient(gradient)
+
+    def _cancel_animation() -> None:
+        """Esc during animation — discard new maze, restore old interactive maze."""
+        nonlocal anim, anim_maze
+        if anim_maze is not None:
+            anim_maze.close()
+        anim_maze = None
+        anim = None
+        renderer.set_gradient(gradient)
+
+    if args.animate:
+        _begin_animation()
+
+    dt: int = 0  # milliseconds since last frame; updated at end of each loop iteration
+
     try:
         running = True
         while running:
@@ -669,6 +771,22 @@ def main(argv: list[str] | None = None) -> None:
                         if menu_layout is not None:
                             open_, new_request = menu_state.handle_mouseup(event.pos, menu_layout)
                             _commit_menu_result(open_, new_request)
+
+                # ---- Animation in progress ---------------------------------
+                elif anim is not None:
+                    if event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_ESCAPE:
+                            _cancel_animation()
+                        elif event.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_KP_ENTER):
+                            _complete_animation()
+                        elif event.key == pygame.K_g:
+                            animate_mode = not animate_mode
+                        elif event.key == pygame.K_h:
+                            show_heatmap = not show_heatmap
+                        elif event.key == pygame.K_s:
+                            show_solution = not show_solution
+                    elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                        _complete_animation()
 
                 # ---- Normal gameplay ----------------------------------------
                 elif event.type == pygame.KEYDOWN:
@@ -697,6 +815,9 @@ def main(argv: list[str] | None = None) -> None:
                                 screen = pygame.display.set_mode((need_w, need_h))
                             else:
                                 pre_menu_size = None  # no resize — nothing to restore
+                    elif event.key == pygame.K_g:
+                        if not is_repeat:
+                            animate_mode = not animate_mode
                     elif event.key == pygame.K_h:
                         if not is_repeat:
                             show_heatmap = not show_heatmap
@@ -706,12 +827,15 @@ def main(argv: list[str] | None = None) -> None:
                     elif event.key in (pygame.K_r, pygame.K_n):
                         if not is_repeat:
                             solved_btn_pressed = False
-                            maze.close()
-                            maze = Maze(request)
-                            gradient = generate_gradient(gradient.base)
-                            renderer.set_gradient(gradient)
-                            arrows_consumed.clear()
-                            drag.end()
+                            if animate_mode:
+                                _begin_animation()
+                            else:
+                                maze.close()
+                                maze = Maze(request)
+                                gradient = generate_gradient(gradient.base)
+                                renderer.set_gradient(gradient)
+                                arrows_consumed.clear()
+                                drag.end()
                     elif event.key in ARROW_KEYS:
                         if event.key in arrows_consumed:
                             continue
@@ -759,21 +883,27 @@ def main(argv: list[str] | None = None) -> None:
                         and solved_btn_pressed
                     ):
                         solved_btn_pressed = False
-                        maze.close()
-                        maze = Maze(request)
-                        gradient = generate_gradient(gradient.base)
-                        renderer.set_gradient(gradient)
-                        arrows_consumed.clear()
-                        drag.end()
+                        if animate_mode:
+                            _begin_animation()
+                        else:
+                            maze.close()
+                            maze = Maze(request)
+                            gradient = generate_gradient(gradient.base)
+                            renderer.set_gradient(gradient)
+                            arrows_consumed.clear()
+                            drag.end()
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     if solved:
                         solved_btn_pressed = False
-                        maze.close()
-                        maze = Maze(request)
-                        gradient = generate_gradient(gradient.base)
-                        renderer.set_gradient(gradient)
-                        arrows_consumed.clear()
-                        drag.end()
+                        if animate_mode:
+                            _begin_animation()
+                        else:
+                            maze.close()
+                            maze = Maze(request)
+                            gradient = generate_gradient(gradient.base)
+                            renderer.set_gradient(gradient)
+                            arrows_consumed.clear()
+                            drag.end()
                     else:
                         drag.begin(event.pos)
                 elif event.type == pygame.MOUSEMOTION:
@@ -781,14 +911,32 @@ def main(argv: list[str] | None = None) -> None:
                 elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                     drag.end()
 
-            cells = maze.cells()
-            solved = _is_solved(cells)
+            # Advance animation with this frame's tick delta.
+            if anim is not None:
+                if anim.tick(dt):
+                    _complete_animation()
+
+            if anim is not None and anim.steps:
+                cells = anim.steps[anim.current_step]
+                solved = False
+            else:
+                cells = maze.cells()
+                solved = _is_solved(cells)
 
             screen.fill((20, 20, 24))
             renderer.draw(cells, show_heatmap=show_heatmap, show_solution=show_solution)
             if solved:
                 _draw_solved_overlay(screen, renderer.maze_rect(cells), big_font, hud_font)
-            _draw_hud(screen, hud_font, request, show_heatmap, show_solution, solved)
+
+            anim_info: str | None = None
+            if anim is not None:
+                step = anim.current_step + 1
+                total = len(anim.steps)
+                anim_info = f"Animating {step}/{total} — Space/click to skip   Esc cancel"
+            _draw_hud(
+                screen, hud_font, request, show_heatmap, show_solution, solved,
+                animate_mode=animate_mode, anim_info=anim_info,
+            )
             if menu_state is not None:
                 menu_layout = draw_menu(screen, menu_state, hud_font)
 
@@ -797,9 +945,11 @@ def main(argv: list[str] | None = None) -> None:
                 screen.blit(gray, (0, 0))
 
             pygame.display.flip()
-            clock.tick(60)
+            dt = clock.tick(60)
     finally:
         maze.close()
+        if anim_maze is not None:
+            anim_maze.close()
         pygame.quit()
 
 

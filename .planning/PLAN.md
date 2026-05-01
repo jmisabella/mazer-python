@@ -605,7 +605,7 @@ Reference: `UpsilonCellView.swift`, `UpsilonMazeView.swift`, `UpsilonMazeView.sw
 
 Verified: 110 passed, 1 skipped (was 107 + 0 before this session). App smoke test under `SDL_VIDEODRIVER=dummy` with H/S/R/Esc exits cleanly. Full suite ~0.51s.
 
-## SESSION 15 [uncompleted]
+## SESSION 15 [completed 2026-04-30]
 ### Stage 14 — Maze generation animation
 
 Add an in-game option to animate maze generation step-by-step, matching the iOS `MazeGenerationAnimationView` behavior.
@@ -641,3 +641,31 @@ Reference: `.planning/referenced_resources/iOS_app/mazer-ios/Views/MazeGeneratio
 - No new integration tests needed — generation steps are already exercised in `test_maze.py`.
 
 **Acceptance**: `G` during play shows `anim:on` in HUD. `R` generates a new maze and animates it step-by-step, all five maze types. Space skips to the final playable maze. `G` again disables animation for the next `R`.
+
+#### Session 15 notes
+
+**State machine** — animation is a new tier between menu and normal gameplay in the event loop priority chain: menu > animation > solved > gameplay. `anim: AnimationState | None` and `anim_maze: Maze | None` are separate from `maze` (the current interactive maze) so Esc-cancel safely restores the old state without data loss. On completion (normal end or skip), `maze.close()` destroys the old maze and `maze = anim_maze` promotes the animation target to the interactive maze.
+
+**`AnimationState` class** — pure Python, no FFI or Pygame dependency. Holds `steps: list`, `current_step: int`, `done: bool`, and a private `_accum_ms` float accumulator. `tick(elapsed_ms)` advances `current_step` by `int(accum / 15.0)` steps at a time (handles multi-step advance when a frame takes > 15ms) and returns True when the last step is reached. `skip()` is idempotent. Placed in `app.py` since it's purely a UI timing concern.
+
+**`_begin_animation()` closure** — uses `dataclasses.replace(request, capture_steps=True)` to create the animation request, pre-loads all steps with `list(anim_maze.generation_steps())`, then calls `renderer.set_gradient(None)` to disable the random-color gradient during playback (iOS uses `wetAsphaltPalette` for animation frames; Python equivalent is the OFF_WHITE row gradient that shows when gradient is None). The old `maze` is untouched during animation; `anim_maze` is the new maze.
+
+**`_complete_animation()` and `_cancel_animation()`** — both restore the gradient (`renderer.set_gradient(gradient)`) after the animation ends. `_complete_animation` closes the old `maze`, promotes `anim_maze`, and generates a new gradient. `_cancel_animation` closes `anim_maze` and leaves `maze` unchanged.
+
+**`dt` tracking** — `dt: int = 0` initialised before the loop; `dt = clock.tick(60)` at the bottom of the loop captures the actual frame time. `anim.tick(dt)` runs immediately after event processing using the *previous* frame's dt — off by one frame but imperceptible at 60fps/15ms step intervals.
+
+**First-launch animation** — `if args.animate: _begin_animation()` called after the initial `Maze(request)` is created, before the event loop. The `--animate` CLI flag also sets `animate_mode = True` so subsequent R/N also animate.
+
+**HUD changes** — `_draw_hud` gains `animate_mode: bool = False` and `anim_info: str | None = None` parameters. When `anim_info` is provided (during animation), it replaces the hint line entirely with `"Animating N/total — Space/click to skip   Esc cancel"`. Otherwise, the hint line gains `G anim:on/off` between the existing controls.
+
+**G key** in both animation tier (toggles mode for the *next* R/N) and normal gameplay (same). Space/Enter/click in animation tier → skip. Esc in animation tier → cancel (not quit).
+
+**Solved-screen regeneration** updated for animation mode: Space/Enter KEYUP when solved and click-on-solved both call `_begin_animation()` when `animate_mode` is True, matching the `R` key behavior.
+
+**Tests** (4 new in `test_ui.py`):
+- `test_animation_steps_advance_per_frame` — verifies tick() advances step correctly including multi-step ticks, plus sub-interval accumulation.
+- `test_animation_skip_jumps_to_last` — skip() sets `current_step == len-1` and `done == True`.
+- `test_animation_completes_at_last_step` — large tick clamps to last step and returns True; subsequent ticks are no-ops.
+- `test_animation_smoke_with_real_maze` — runs a 5×5 Orthogonal maze with `capture_steps=True`, wraps steps in `AnimationState`, ticks to completion; verifies no FFI errors across the full stack.
+
+Verified: 114 passed, 1 skipped (was 110 + 1 before this session). Full suite ~0.41s. Interactive acceptance (visual animation playback, G toggle, Space skip) requires the user at a real display.

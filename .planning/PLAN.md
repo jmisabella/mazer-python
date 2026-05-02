@@ -669,3 +669,29 @@ Reference: `.planning/referenced_resources/iOS_app/mazer-ios/Views/MazeGeneratio
 - `test_animation_smoke_with_real_maze` — runs a 5×5 Orthogonal maze with `capture_steps=True`, wraps steps in `AnimationState`, ticks to completion; verifies no FFI errors across the full stack.
 
 Verified: 114 passed, 1 skipped (was 110 + 1 before this session). Full suite ~0.41s. Interactive acceptance (visual animation playback, G toggle, Space skip) requires the user at a real display.
+
+## Session 16 [completed 2026-05-01]
+### Prevent oversizing board based on screen dimensions
+
+Is this even possible? I know it is on an iPhone but do not know for Mac, Windows, etc... screens. But if it is possible, don't allow user to make width or height exceed screen size. Actually, I'm also considering making a max width and height for animation mode at the very least, as when there are too many cells sometimes, in particular Aldous Broder board, takes WAY too long to generate with screen animation mode enabled when drawing the animation. Let's plan this one carefully
+
+#### Session 16 notes
+
+**Screen-size detection**: `pygame.display.get_desktop_sizes()` (with `pygame.display.Info()` as fallback) is called after `pygame.init()` and before the first `set_mode()` on every platform (macOS, Linux, Windows). Returns the primary display resolution. Applied margins: 95% width, 90% height (leaves room for dock/taskbar). Result: `screen_max_sizes: dict[MazeType, tuple[int,int]]` computed once in `main()` and threaded to the menu.
+
+**`_max_grid_for_screen()`** (new pure function in `app.py`): inverts each branch of the existing `_window_size()` formula analytically — one branch per maze type. Results are clamped to minimum 2 to guard against degenerate tiny displays. Placed alongside `_window_size()` for discoverability.
+
+**Screen limit enforcement**:
+- **CLI args**: after `_build_request()` in `main()`, width/height are compared against `screen_max_sizes[maze_type]`. If exceeded, `dataclasses.replace()` builds a corrected request and a warning is printed to stderr. Goal coordinate is also clamped + Rhombic parity-nudge applied if needed.
+- **In-game menu**: `MenuState.__init__` now accepts `max_sizes: dict | None`, `animate_mode: bool`, and `anim_max_side: int`. New `_effective_max()` method merges screen max with the per-side animation cap. Width/height are clamped on open and on every `_change_value()` call. Type changes also re-clamp (different maze types have different pixel footprints per cell, so SIGMA's screen max differs from ORTHOGONAL's).
+
+**Animation cell limit**: `ANIM_MAX_SIDE = 16` (16×16 = 256 cells — conservative enough that Aldous-Broder's O(n log n) step count stays manageable). Two enforcement layers:
+1. **Menu** (primary): when `animate_mode=True`, `_effective_max()` caps both dimensions to `anim_max_side`. Menu draws an info note in the error-area slot: `"Anim mode active — max 16×16 per side"` in blue when animate mode is on and no error exists.
+2. **`_begin_animation()` guard** (belt-and-suspenders for CLI `--animate` on an oversized grid): if `request.width > ANIM_MAX_SIDE or request.height > ANIM_MAX_SIDE`, sets a 4-second transient HUD warning (orange text in the hint line) and returns immediately without starting animation. The interactive maze remains unchanged.
+
+**Transient HUD message**: `_hud_msg: str` + `_hud_msg_until: int` (ticks) maintained in `main()` scope. `_set_hud_msg(msg, duration_ms=4000)` closure sets both. Each render frame: if `pygame.time.get_ticks() < _hud_msg_until`, passes `_hud_msg` to `_draw_hud()` which renders it in orange and takes priority over both the anim-info string and the normal hint line.
+
+**`draw_menu()` layout note**: the existing `_ERROR_H` row at the bottom of the panel is reused for the anim-mode note — no panel height change needed. Error text (red) and anim note (blue) are mutually exclusive: error wins when set.
+
+Verified: 118 passed (was 114 before this session; +4 new tests: `test_menu_screen_size_clamps_dimensions`, `test_menu_anim_mode_clamps_to_anim_max_side`, `test_menu_type_change_reclamps_dimensions`, plus the animation completes/skip tests were already in the prior count). Full suite ~1.6s. Interactive acceptance (screen clamping, menu anim limit, HUD warning) requires user at a real display.
+

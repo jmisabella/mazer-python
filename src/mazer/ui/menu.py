@@ -109,7 +109,13 @@ class MenuState:
     MIN_SIZE = 2
     MAX_SIZE = 40
 
-    def __init__(self, request: MazeRequest) -> None:
+    def __init__(
+        self,
+        request: MazeRequest,
+        max_sizes: dict | None = None,
+        animate_mode: bool = False,
+        anim_max_side: int = 16,
+    ) -> None:
         self.type_idx: int = self.SUPPORTED_TYPES.index(request.maze_type)
         self.algo_idx: int = self.ALGORITHMS.index(request.algorithm)
         self.width: int = request.width
@@ -117,6 +123,13 @@ class MenuState:
         self.section: int = self.SECTION_TYPE
         self.error: str | None = None
         self.btn_pressed: bool = False  # True while Space or mouse button is held on Generate
+        self._max_sizes = max_sizes
+        self._animate_mode = animate_mode
+        self._anim_max_side = anim_max_side
+        # Clamp width/height to the effective max on open.
+        max_w, max_h = self._effective_max()
+        self.width = max(self.MIN_SIZE, min(self.width, max_w))
+        self.height = max(self.MIN_SIZE, min(self.height, max_h))
 
     # -- Keyboard ------------------------------------------------------------
 
@@ -241,16 +254,40 @@ class MenuState:
 
     # -- Helpers -------------------------------------------------------------
 
+    def _effective_max(self) -> tuple[int, int]:
+        """Return (max_width, max_height) for the currently selected maze type.
+
+        Combines the screen-based limit (from *max_sizes*) with the per-side
+        animation cap (when *animate_mode* is True).
+        """
+        mt = self.SUPPORTED_TYPES[self.type_idx]
+        if self._max_sizes is not None:
+            screen_max = self._max_sizes.get(mt, (self.MAX_SIZE, self.MAX_SIZE))
+        else:
+            screen_max = (self.MAX_SIZE, self.MAX_SIZE)
+        if self._animate_mode:
+            return (
+                min(screen_max[0], self._anim_max_side),
+                min(screen_max[1], self._anim_max_side),
+            )
+        return screen_max
+
     def _change_value(self, delta: int) -> None:
         self.error = None
         if self.section == self.SECTION_TYPE:
             self.type_idx = (self.type_idx + delta) % len(self.SUPPORTED_TYPES)
+            # Re-clamp width/height to the new type's effective max.
+            max_w, max_h = self._effective_max()
+            self.width = min(self.width, max_w)
+            self.height = min(self.height, max_h)
         elif self.section == self.SECTION_ALGO:
             self.algo_idx = (self.algo_idx + delta) % len(self.ALGORITHMS)
         elif self.section == self.SECTION_WIDTH:
-            self.width = max(self.MIN_SIZE, min(self.MAX_SIZE, self.width + delta))
+            max_w, _ = self._effective_max()
+            self.width = max(self.MIN_SIZE, min(max_w, self.width + delta))
         elif self.section == self.SECTION_HEIGHT:
-            self.height = max(self.MIN_SIZE, min(self.MAX_SIZE, self.height + delta))
+            _, max_h = self._effective_max()
+            self.height = max(self.MIN_SIZE, min(max_h, self.height + delta))
 
     def _do_generate(self) -> tuple[bool, MazeRequest | None]:
         """Build and return a MazeRequest unconditionally (section check bypassed)."""
@@ -382,10 +419,17 @@ def draw_menu(
     btn_text = font.render("Generate", True, txt_color)
     surface.blit(btn_text, btn_text.get_rect(center=btn_rect.center))
 
-    # Error message.
+    # Error message — or animation-mode info note when no error is present.
+    cy += _BTN_H + _PAD // 2
     if state.error:
-        cy += _BTN_H + _PAD // 2
         err = font.render(state.error, True, _ERROR_COLOR)
         surface.blit(err, err.get_rect(centerx=px + _MENU_W // 2, top=cy))
+    elif state._animate_mode:
+        note = font.render(
+            f"Anim mode active — max {state._anim_max_side}×{state._anim_max_side} per side",
+            True,
+            (60, 100, 200),
+        )
+        surface.blit(note, note.get_rect(centerx=px + _MENU_W // 2, top=cy))
 
     return layout

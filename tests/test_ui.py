@@ -1219,3 +1219,84 @@ def test_animation_smoke_with_real_maze() -> None:
             break
     assert anim.done
     assert anim.current_step == len(all_steps) - 1
+
+
+# --- Screen-size and animation-limit clamping (MenuState) -------------------
+
+
+def test_menu_screen_size_clamps_dimensions() -> None:
+    """max_sizes caps width/height to screen-derived limits on open and during navigation."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=30, height=25,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(29, 24),
+    )
+    screen_max = {MazeType.ORTHOGONAL: (10, 8)}
+    state = MenuState(request, max_sizes=screen_max)
+    # Clamped on open.
+    assert state.width == 10
+    assert state.height == 8
+    # Can't push past screen max.
+    state.section = MenuState.SECTION_WIDTH
+    state.handle_keydown(pygame.K_RIGHT)
+    assert state.width == 10
+    state.section = MenuState.SECTION_HEIGHT
+    state.handle_keydown(pygame.K_RIGHT)
+    assert state.height == 8
+
+
+def test_menu_anim_mode_clamps_to_anim_max_side() -> None:
+    """When animate_mode is True, width/height are capped to anim_max_side."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=20, height=20,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(19, 19),
+    )
+    state = MenuState(request, animate_mode=True, anim_max_side=16)
+    # Initial clamp to anim_max_side.
+    assert state.width == 16
+    assert state.height == 16
+    # Navigation can't exceed anim_max_side.
+    state.section = MenuState.SECTION_WIDTH
+    state.handle_keydown(pygame.K_RIGHT)
+    assert state.width == 16
+    state.section = MenuState.SECTION_HEIGHT
+    state.handle_keydown(pygame.K_RIGHT)
+    assert state.height == 16
+    # Can still decrease.
+    state.handle_keydown(pygame.K_LEFT)
+    assert state.height == 15
+
+
+def test_menu_type_change_reclamps_dimensions() -> None:
+    """Switching maze type in the menu re-clamps width/height to the new type's max."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=12, height=12,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(11, 11),
+    )
+    # ORTHOGONAL allows 12 wide but SIGMA only allows 8.
+    screen_max = {
+        MazeType.ORTHOGONAL: (12, 12),
+        MazeType.SIGMA: (8, 8),
+    }
+    state = MenuState(request, max_sizes=screen_max)
+    assert state.width == 12  # ORTHOGONAL allows it
+
+    # Cycle type to SIGMA (one step right from ORTHOGONAL is SIGMA).
+    state.section = MenuState.SECTION_TYPE
+    state.handle_keydown(pygame.K_RIGHT)
+    new_type = MenuState.SUPPORTED_TYPES[state.type_idx]
+    assert new_type == MazeType.SIGMA
+    # Width and height must be clamped to the SIGMA limit.
+    assert state.width <= 8
+    assert state.height <= 8

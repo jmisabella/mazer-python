@@ -67,6 +67,7 @@ import argparse
 import dataclasses
 import math
 import sys
+from collections import deque
 
 import pygame
 
@@ -747,6 +748,9 @@ def main(argv: list[str] | None = None) -> None:
     # whole screen turns grayscale until release, then a new maze generates.
     solved_btn_pressed: bool = False
     solved: bool = False  # pre-initialised so the event loop can read it on frame 0
+    trail: deque = deque(maxlen=3)   # coords of the last 3 vacated cells, index 0 = most recent
+    _prev_active_coord = None        # active coord from the previous frame
+    _visited_set: set = set()        # all coords the player has ever stood on this maze
 
     # Sticky animation mode — toggled by G key.  When True, R/N and first
     # launch with --animate generate with capture_steps=True and play the
@@ -782,7 +786,7 @@ def main(argv: list[str] | None = None) -> None:
         Mutates the enclosing ``main`` scope via ``nonlocal``.
         """
         nonlocal maze, renderer, cell_size, screen, request, key_map, gradient
-        nonlocal menu_state, menu_layout, pre_menu_size
+        nonlocal menu_state, menu_layout, pre_menu_size, trail, _prev_active_coord
         if not open_:
             if new_request is not None:
                 try:
@@ -793,6 +797,9 @@ def main(argv: list[str] | None = None) -> None:
                     key_map = _KEYS_BY_TYPE.get(request.maze_type, ORTHOGONAL_KEYS)
                     gradient = generate_gradient()
                     renderer.set_gradient(gradient)
+                    trail.clear()
+                    _prev_active_coord = None
+                    _visited_set.clear()
                     arrows_consumed.clear()
                     drag.end()
                     pygame.display.set_caption(
@@ -849,13 +856,16 @@ def main(argv: list[str] | None = None) -> None:
 
     def _complete_animation() -> None:
         """Finish animation (normal end or skip) — switch to interactive play."""
-        nonlocal maze, anim, anim_maze, gradient
+        nonlocal maze, anim, anim_maze, gradient, trail, _prev_active_coord
         if anim is not None:
             anim.skip()
         maze.close()
         maze = anim_maze
         anim_maze = None
         anim = None
+        trail.clear()
+        _prev_active_coord = None
+        _visited_set.clear()
         gradient = generate_gradient(gradient.base)
         renderer.set_gradient(gradient)
 
@@ -1036,6 +1046,9 @@ def main(argv: list[str] | None = None) -> None:
                         else:
                             maze.close()
                             maze = Maze(request)
+                            trail.clear()
+                            _prev_active_coord = None
+                            _visited_set.clear()
                             gradient = generate_gradient(gradient.base)
                             renderer.set_gradient(gradient)
                             arrows_consumed.clear()
@@ -1048,6 +1061,9 @@ def main(argv: list[str] | None = None) -> None:
                         else:
                             maze.close()
                             maze = Maze(request)
+                            trail.clear()
+                            _prev_active_coord = None
+                            _visited_set.clear()
                             gradient = generate_gradient(gradient.base)
                             renderer.set_gradient(gradient)
                             arrows_consumed.clear()
@@ -1086,12 +1102,23 @@ def main(argv: list[str] | None = None) -> None:
             if anim is not None and anim.steps:
                 cells = anim.steps[anim.current_step]
                 solved = False
+                active_trail = None
             else:
                 cells = maze.cells()
                 solved = _is_solved(cells)
+                active_coord = next((c.coord for c in cells if c.is_active), None)
+                if active_coord != _prev_active_coord and _prev_active_coord is not None:
+                    if active_coord not in _visited_set:  # new cell — moving forward
+                        trail.appendleft(_prev_active_coord)
+                    else:                                 # already visited — backtracking
+                        trail.clear()
+                if active_coord is not None:
+                    _visited_set.add(active_coord)
+                _prev_active_coord = active_coord
+                active_trail = list(trail) if trail else None
 
             screen.fill((20, 20, 24))
-            renderer.draw(cells, show_heatmap=show_heatmap, show_solution=show_solution)
+            renderer.draw(cells, show_heatmap=show_heatmap, show_solution=show_solution, trail=active_trail)
             if solved:
                 _draw_solved_overlay(screen, renderer.maze_rect(cells), big_font, hud_font)
 

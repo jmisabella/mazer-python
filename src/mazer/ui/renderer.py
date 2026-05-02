@@ -113,6 +113,12 @@ OFF_WHITE = (255, 245, 230)            # CellColors.offWhite (#FFF5E6)
 START_COLOR = (0, 122, 255)            # SwiftUI .blue
 GOAL_COLOR = (255, 59, 48)             # SwiftUI .red
 VISITED_COLOR = (255, 120, 180)        # CellColors.traversedPathColor
+ACTIVE_CELL_COLOR = (180, 15, 95)      # darkest fuchsia — current player cell background
+TRAIL_COLORS = [                       # index 0 = 1 step back (darkest), index 2 = 3 steps back (lightest)
+    (210, 40, 120),
+    (235, 75, 148),
+    (248, 105, 167),
+]
 SOLUTION_COLOR = (116, 180, 191)       # midpoint of vividBlue and gray (CellColors.solutionPathColor)
 ACTIVE_MARKER_COLOR = (250, 200, 0)    # warm yellow — distinct from start/goal/solution
 OPEN_EXIT_DOT_COLOR = (255, 255, 255)  # contrast against any cell background
@@ -245,6 +251,7 @@ def cell_color(
     show_solution: bool,
     palette,
     gradient: GradientTheme | None = None,
+    trail: dict | None = None,
 ) -> tuple[int, int, int]:
     """Decision chain for a cell's fill color.
 
@@ -256,6 +263,10 @@ def cell_color(
         return START_COLOR
     if cell.is_goal:
         return GOAL_COLOR
+    if cell.is_active:
+        return ACTIVE_CELL_COLOR
+    if trail and cell.coord in trail:
+        return TRAIL_COLORS[trail[cell.coord]]
     if cell.is_visited:
         return VISITED_COLOR
     if show_solution and cell.on_solution_path:
@@ -317,9 +328,10 @@ class OrthogonalRenderer:
     def set_gradient(self, gradient: GradientTheme | None) -> None:
         self.gradient = gradient
 
-    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool) -> None:
+    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool, trail: list | None = None) -> None:
         if not cells:
             return
+        self._trail_dict: dict = {coord: i for i, coord in enumerate(trail)} if trail else {}
         max_distance = max(c.distance for c in cells)
         total_cols = max(c.coord.x for c in cells) + 1
         total_rows = max(c.coord.y for c in cells) + 1
@@ -376,7 +388,7 @@ class OrthogonalRenderer:
         rect = self._cell_rect(cell.coord.x, cell.coord.y)
         pygame.draw.rect(
             self.surface,
-            cell_color(cell, max_distance, total_rows, show_heatmap, show_solution, self.palette, self.gradient),
+            cell_color(cell, max_distance, total_rows, show_heatmap, show_solution, self.palette, self.gradient, self._trail_dict),
             rect,
         )
 
@@ -597,9 +609,10 @@ class SigmaRenderer:
     def set_gradient(self, gradient: GradientTheme | None) -> None:
         self.gradient = gradient
 
-    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool) -> None:
+    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool, trail: list | None = None) -> None:
         if not cells:
             return
+        self._trail_dict: dict = {coord: i for i, coord in enumerate(trail)} if trail else {}
         max_distance = max(c.distance for c in cells)
         total_rows = max(c.coord.y for c in cells) + 1
         by_coord = {c.coord: c for c in cells}
@@ -702,7 +715,7 @@ class SigmaRenderer:
         polygon = self._cell_polygon(q, r)
         pygame.draw.polygon(
             self.surface,
-            cell_color(cell, max_distance, total_rows, show_heatmap, show_solution, self.palette, self.gradient),
+            cell_color(cell, max_distance, total_rows, show_heatmap, show_solution, self.palette, self.gradient, self._trail_dict),
             polygon,
         )
 
@@ -839,9 +852,10 @@ class DeltaRenderer:
         h = int(round(self.tri_height * rows))
         return pygame.Rect(self.offset_x, self.offset_y, w, h)
 
-    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool) -> None:
+    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool, trail: list | None = None) -> None:
         if not cells:
             return
+        self._trail_dict: dict = {coord: i for i, coord in enumerate(trail)} if trail else {}
         max_distance = max(c.distance for c in cells)
         total_rows = max(c.coord.y for c in cells) + 1
         bbox = self.maze_rect(cells)
@@ -901,7 +915,7 @@ class DeltaRenderer:
 
         pygame.draw.polygon(
             self.surface,
-            cell_color(cell, max_distance, total_rows, show_heatmap, show_solution, self.palette, self.gradient),
+            cell_color(cell, max_distance, total_rows, show_heatmap, show_solution, self.palette, self.gradient, self._trail_dict),
             polygon,
         )
 
@@ -1042,10 +1056,11 @@ class RhombicRenderer:
         h = int(round(self.half_diagonal * max_y + self.diagonal))
         return pygame.Rect(self.offset_x, self.offset_y, w, h)
 
-    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool) -> None:
+    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool, trail: list | None = None) -> None:
         valid = [c for c in cells if (c.coord.x + c.coord.y) % 2 == 0]
         if not valid:
             return
+        self._trail_dict: dict = {coord: i for i, coord in enumerate(trail)} if trail else {}
         max_distance = max(c.distance for c in valid)
         total_rows = max(c.coord.y for c in valid) + 1
         bbox = self.maze_rect(valid)
@@ -1107,7 +1122,7 @@ class RhombicRenderer:
             self.surface,
             cell_color(
                 cell, max_distance, total_rows, show_heatmap, show_solution,
-                self.palette, self.gradient,
+                self.palette, self.gradient, self._trail_dict,
             ),
             polygon,
         )
@@ -1269,9 +1284,10 @@ class UpsilonRenderer:
         h = int(round((rows - 1) * self.step + self.cell_size))
         return pygame.Rect(self.offset_x, self.offset_y, w, h)
 
-    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool) -> None:
+    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool, trail: list | None = None) -> None:
         if not cells:
             return
+        self._trail_dict: dict = {coord: i for i, coord in enumerate(trail)} if trail else {}
         max_distance = max(c.distance for c in cells)
         total_rows = max(c.coord.y for c in cells) + 1
         bbox = self.maze_rect(cells)
@@ -1357,7 +1373,7 @@ class UpsilonRenderer:
             self.surface,
             cell_color(
                 cell, max_distance, total_rows, show_heatmap, show_solution,
-                self.palette, self.gradient,
+                self.palette, self.gradient, self._trail_dict,
             ),
             polygon,
         )

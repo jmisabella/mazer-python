@@ -695,3 +695,23 @@ Is this even possible? I know it is on an iPhone but do not know for Mac, Window
 
 Verified: 118 passed (was 114 before this session; +4 new tests: `test_menu_screen_size_clamps_dimensions`, `test_menu_anim_mode_clamps_to_anim_max_side`, `test_menu_type_change_reclamps_dimensions`, plus the animation completes/skip tests were already in the prior count). Full suite ~1.6s. Interactive acceptance (screen clamping, menu anim limit, HUD warning) requires user at a real display.
 
+## Session 17 [completed 2026-05-02]
+### Pink trail gradient for recently visited cells
+
+The 2-3 cells immediately behind the player's current position now display progressively lighter shades of pink, fading toward an even lighter pink on the current cell itself.
+
+#### Session 17 notes
+
+**Color scheme** (from darkest trail to lightest):
+- Normal visited cells: `VISITED_COLOR = (255, 120, 180)` — unchanged
+- 3 steps back (farthest trail): `(255, 140, 192)`
+- 2 steps back: `(255, 165, 205)`
+- 1 step back (closest to current): `(255, 193, 222)`
+- Current cell background: `ACTIVE_CELL_COLOR = (255, 215, 235)` — lightest pink
+
+**Trail tracking** (`app.py`): A `deque(maxlen=3)` named `trail` holds the last 3 vacated cell coords, with index 0 being the most recently vacated (closest to current). A `_prev_active_coord` tracks the active coord from the previous frame. Each frame (non-animation only), when the active coord changes, the old coord is pushed to the front of the deque via `appendleft`. Trail is cleared and `_prev_active_coord` reset to `None` on every maze reset: menu new-maze, `_complete_animation`, and both solved-screen new-maze paths (Space/Enter and click).
+
+**Renderer integration**: `cell_color()` gained a `trail: dict | None` parameter (a `{Coord: int}` lookup where the int is the trail index). The decision chain now checks `cell.is_active` before `cell.is_visited`, returning `ACTIVE_CELL_COLOR` for the current cell; trail cells are caught before `is_visited` returns the standard pink. Each renderer's `draw()` builds `self._trail_dict` from the passed `trail` list and each `_draw_cell()` passes it to `cell_color()`. Animation frames pass `trail=None` (no player movement during animation).
+
+Verified: 118 passed (no new tests — rendering changes are visual only). Full suite ~0.5s.
+

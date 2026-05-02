@@ -1248,30 +1248,34 @@ def test_menu_screen_size_clamps_dimensions() -> None:
     assert state.height == 8
 
 
-def test_menu_anim_mode_clamps_to_anim_max_side() -> None:
-    """When animate_mode is True, width/height are capped to anim_max_side."""
+def test_menu_anim_mode_clamps_to_anim_max_w_h() -> None:
+    """When animate_mode is True, width is capped to anim_max_w and height to anim_max_h independently."""
     from mazer.ui.menu import MenuState
 
     request = MazeRequest(
         maze_type=MazeType.ORTHOGONAL,
-        width=20, height=20,
+        width=30, height=30,
         algorithm=Algorithm.RECURSIVE_BACKTRACKER,
-        start=Coord(0, 0), goal=Coord(19, 19),
+        start=Coord(0, 0), goal=Coord(29, 29),
     )
-    state = MenuState(request, animate_mode=True, anim_max_side=16)
-    # Initial clamp to anim_max_side.
-    assert state.width == 16
-    assert state.height == 16
-    # Navigation can't exceed anim_max_side.
+    state = MenuState(request, animate_mode=True, anim_max_w=30, anim_max_h=20)
+    # Initial clamp to separate axis limits.
+    assert state.width == 30
+    assert state.height == 20
+    # Width can't exceed anim_max_w.
     state.section = MenuState.SECTION_WIDTH
     state.handle_keydown(pygame.K_RIGHT)
-    assert state.width == 16
+    assert state.width == 30
+    # Height can't exceed anim_max_h.
     state.section = MenuState.SECTION_HEIGHT
     state.handle_keydown(pygame.K_RIGHT)
-    assert state.height == 16
-    # Can still decrease.
+    assert state.height == 20
+    # Reducing height doesn't raise the width cap.
     state.handle_keydown(pygame.K_LEFT)
-    assert state.height == 15
+    assert state.height == 19
+    state.section = MenuState.SECTION_WIDTH
+    state.handle_keydown(pygame.K_RIGHT)
+    assert state.width == 30  # still capped at anim_max_w regardless of height
 
 
 def test_menu_type_change_reclamps_dimensions() -> None:

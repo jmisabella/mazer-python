@@ -90,7 +90,8 @@ _MENU_MIN_WINDOW_H = 450
 
 # Per-side grid cap when animation mode is active.  16×16 = 256 cells keeps
 # even Aldous-Broder step counts manageable (O(n log n) expected steps).
-ANIM_MAX_SIDE: int = 16
+ANIM_MAX_W: int = 30   # max width (cols) allowed when animation mode is on
+ANIM_MAX_H: int = 20   # max height (rows) allowed when animation mode is on
 
 # Fraction of the primary display dimensions used as the safe available area
 # for maze windows (leaves room for OS taskbars, the macOS dock, etc.).
@@ -103,19 +104,26 @@ SCREEN_MARGIN_H: float = 0.90
 _GAMEPLAY_REPEAT_DELAY = 200     # ms before first auto-move when key held
 _GAMEPLAY_REPEAT_INTERVAL = 100  # ms between subsequent auto-moves
 
+# Hold-to-scroll on menu arrow buttons (mirrors pygame.key.set_repeat values
+# used when the menu is open so mouse and keyboard feel identical).
+_MENU_ARROW_REPEAT_DELAY = 300    # ms held before first auto-repeat fires
+_MENU_ARROW_REPEAT_INTERVAL = 60  # ms between subsequent repeats
+
 # Per-maze-type defaults. Tuple of (cell_size, width, height) — the
 # default algorithm is RecursiveBacktracker for all types because it
 # produces winding paths that show off the heatmap and solution-path
 # overlays well; user can override with --algo.
-# Rhombic: 11×11 so goal=(10,10) satisfies (x+y)%2==0 (only even-sum
-# cells exist); cell_size=36 gives a diagonal≈51px for comfortable clicking.
+# All defaults target a landscape aspect ratio of at least 1.75:1
+# (width ≥ 1.75 × height) so the window opens wider than it is tall.
+# Rhombic: 14×8 — goal=(13,7), (13+7)=20 satisfies (x+y)%2==0 (only
+# even-sum cells exist); cell_size=36 gives a diagonal≈51px for clicking.
 _DEFAULTS: dict[MazeType, tuple[int, int, int]] = {
-    MazeType.ORTHOGONAL: (28, 20, 20),
-    MazeType.SIGMA: (26, 11, 10),
-    MazeType.DELTA: (30, 20, 12),
-    MazeType.RHOMBIC: (36, 11, 11),
-    # Upsilon: cell_size=40 gives step≈28px; 10×10 produces a ~295×295 maze.
-    MazeType.UPSILON: (40, 10, 10),
+    MazeType.ORTHOGONAL: (28, 28, 16),   # 1.75:1
+    MazeType.SIGMA: (26, 14, 8),         # 1.75:1
+    MazeType.DELTA: (30, 21, 12),        # 1.75:1
+    MazeType.RHOMBIC: (36, 14, 8),       # 1.75:1
+    # Upsilon: cell_size=40 gives step≈28px; 18×10 produces a ~521×351 maze.
+    MazeType.UPSILON: (40, 18, 10),      # 1.80:1
 }
 
 ORTHOGONAL_KEYS: dict[int, Direction] = {
@@ -753,6 +761,11 @@ def main(argv: list[str] | None = None) -> None:
     # cancels.  None when the menu is not open (or when the window was
     # already large enough and no resize was needed).
     pre_menu_size: tuple[int, int] | None = None
+    # Hold-to-scroll state for menu arrow buttons.  Records which arrow
+    # (section + delta) is held and when the hold started / last fired.
+    _arrow_held: tuple[int, int] | None = None   # (section, delta: -1 or +1)
+    _arrow_held_since: int = 0                   # ticks of initial press
+    _arrow_last_fire: int = 0                    # ticks of most recent repeat
 
     # Transient HUD message shown for a fixed duration (e.g. animation-skipped warning).
     _hud_msg: str = ""
@@ -811,15 +824,15 @@ def main(argv: list[str] | None = None) -> None:
     def _begin_animation() -> None:
         """Start step-by-step animation for the current request.
 
-        Returns immediately (no animation) if the grid exceeds ANIM_MAX_SIDE —
-        the menu already prevents this for in-game sessions; this guard catches
-        the CLI ``--animate`` path on an oversized grid.
+        Returns immediately (no animation) if the grid exceeds ANIM_MAX_W ×
+        ANIM_MAX_H — the menu already prevents this for in-game sessions; this
+        guard catches the CLI ``--animate`` path on an oversized grid.
         """
         nonlocal anim, anim_maze, solved_btn_pressed
-        if request.width > ANIM_MAX_SIDE or request.height > ANIM_MAX_SIDE:
+        if request.width > ANIM_MAX_W or request.height > ANIM_MAX_H:
             _set_hud_msg(
                 f"⚠ Too large to animate ({request.width}×{request.height}"
-                f" > {ANIM_MAX_SIDE}×{ANIM_MAX_SIDE})"
+                f" > {ANIM_MAX_W}×{ANIM_MAX_H})"
                 f" — reduce size (M) or disable anim (G)"
             )
             return
@@ -877,9 +890,26 @@ def main(argv: list[str] | None = None) -> None:
                         _commit_menu_result(open_, new_request)
                     elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                         if menu_layout is not None:
+                            # Detect arrow-button hold for auto-repeat.
+                            _arrow_held = None
+                            now = pygame.time.get_ticks()
+                            for _sec, _rect in menu_layout.left_arrows.items():
+                                if _rect.collidepoint(event.pos):
+                                    _arrow_held = (_sec, -1)
+                                    _arrow_held_since = now
+                                    _arrow_last_fire = now
+                                    break
+                            if _arrow_held is None:
+                                for _sec, _rect in menu_layout.right_arrows.items():
+                                    if _rect.collidepoint(event.pos):
+                                        _arrow_held = (_sec, +1)
+                                        _arrow_held_since = now
+                                        _arrow_last_fire = now
+                                        break
                             open_, new_request = menu_state.handle_mousedown(event.pos, menu_layout)
                             _commit_menu_result(open_, new_request)
                     elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                        _arrow_held = None
                         if menu_layout is not None:
                             open_, new_request = menu_state.handle_mouseup(event.pos, menu_layout)
                             _commit_menu_result(open_, new_request)
@@ -907,8 +937,8 @@ def main(argv: list[str] | None = None) -> None:
                     if event.key == pygame.K_ESCAPE:
                         if not is_repeat:
                             running = False
-                    elif event.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_KP_ENTER):
-                        if solved and not is_repeat:
+                    elif event.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_n):
+                        if not is_repeat and (solved or event.key in (pygame.K_SPACE, pygame.K_n)):
                             solved_btn_pressed = True
                     elif event.key == pygame.K_m:
                         if not is_repeat:
@@ -917,7 +947,8 @@ def main(argv: list[str] | None = None) -> None:
                                 request,
                                 max_sizes=screen_max_sizes,
                                 animate_mode=animate_mode,
-                                anim_max_side=ANIM_MAX_SIDE,
+                                anim_max_w=ANIM_MAX_W,
+                                anim_max_h=ANIM_MAX_H,
                             )
                             menu_layout = None
                             keys_held.clear()
@@ -941,7 +972,7 @@ def main(argv: list[str] | None = None) -> None:
                     elif event.key == pygame.K_s:
                         if not is_repeat:
                             show_solution = not show_solution
-                    elif event.key in (pygame.K_r, pygame.K_n):
+                    elif event.key == pygame.K_r:
                         if not is_repeat:
                             solved_btn_pressed = False
                             if animate_mode:
@@ -996,7 +1027,7 @@ def main(argv: list[str] | None = None) -> None:
                     if event.key in ARROW_KEYS:
                         arrows_consumed.discard(event.key)
                     if (
-                        event.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_KP_ENTER)
+                        event.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_n)
                         and solved_btn_pressed
                     ):
                         solved_btn_pressed = False
@@ -1028,9 +1059,28 @@ def main(argv: list[str] | None = None) -> None:
                 elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                     drag.end()
 
+            # Hold-to-scroll: fire repeated value changes while an arrow button
+            # is held, mirroring pygame's key-repeat behaviour for the menu.
+            if menu_state is not None and _arrow_held is not None and menu_layout is not None:
+                _now = pygame.time.get_ticks()
+                if _now - _arrow_held_since >= _MENU_ARROW_REPEAT_DELAY:
+                    if _now - _arrow_last_fire >= _MENU_ARROW_REPEAT_INTERVAL:
+                        _held_sec, _held_delta = _arrow_held
+                        _arrow_map = (
+                            menu_layout.left_arrows if _held_delta == -1
+                            else menu_layout.right_arrows
+                        )
+                        if (
+                            _held_sec in _arrow_map
+                            and _arrow_map[_held_sec].collidepoint(pygame.mouse.get_pos())
+                        ):
+                            menu_state.section = _held_sec
+                            menu_state._change_value(_held_delta)
+                        _arrow_last_fire = _now
+
             # Advance animation with this frame's tick delta.
             if anim is not None:
-                if anim.tick(dt):
+                if anim.tick(min(dt, 32)):
                     _complete_animation()
 
             if anim is not None and anim.steps:

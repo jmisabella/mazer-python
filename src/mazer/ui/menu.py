@@ -114,7 +114,8 @@ class MenuState:
         request: MazeRequest,
         max_sizes: dict | None = None,
         animate_mode: bool = False,
-        anim_max_side: int = 16,
+        anim_max_w: int = 30,
+        anim_max_h: int = 20,
     ) -> None:
         self.type_idx: int = self.SUPPORTED_TYPES.index(request.maze_type)
         self.algo_idx: int = self.ALGORITHMS.index(request.algorithm)
@@ -125,7 +126,8 @@ class MenuState:
         self.btn_pressed: bool = False  # True while Space or mouse button is held on Generate
         self._max_sizes = max_sizes
         self._animate_mode = animate_mode
-        self._anim_max_side = anim_max_side
+        self._anim_max_w = anim_max_w
+        self._anim_max_h = anim_max_h
         # Clamp width/height to the effective max on open.
         max_w, max_h = self._effective_max()
         self.width = max(self.MIN_SIZE, min(self.width, max_w))
@@ -267,8 +269,8 @@ class MenuState:
             screen_max = (self.MAX_SIZE, self.MAX_SIZE)
         if self._animate_mode:
             return (
-                min(screen_max[0], self._anim_max_side),
-                min(screen_max[1], self._anim_max_side),
+                min(screen_max[0], self._anim_max_w),
+                min(screen_max[1], self._anim_max_h),
             )
         return screen_max
 
@@ -426,7 +428,7 @@ def draw_menu(
         surface.blit(err, err.get_rect(centerx=px + _MENU_W // 2, top=cy))
     elif state._animate_mode:
         note = font.render(
-            f"Anim mode active — max {state._anim_max_side}×{state._anim_max_side} per side",
+            f"Anim mode active — max {state._anim_max_w}×{state._anim_max_h}",
             True,
             (60, 100, 200),
         )

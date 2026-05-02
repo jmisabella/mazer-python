@@ -715,3 +715,16 @@ The 2-3 cells immediately behind the player's current position now display progr
 
 Verified: 118 passed (no new tests — rendering changes are visual only). Full suite ~0.5s.
 
+## Session 18 [completed 2026-05-02]
+### Animate solution path when enabled instead as opposed to showing entire thing at once
+
+In the iOS app we animate the solution one cell at a time but in rapid succession and it looks visually appealing. I'm hoping we might be able to accomplish some similar effect here.
+
+#### Session 18 notes
+
+- **`SolutionAnimState` class** added to `app.py` (after `AnimationState`). Accepts solution-path cells, sorts them by `distance` (start=0 → goal=max), and reveals one coord per `ANIM_STEP_INTERVAL_MS` (15ms) tick — matching the maze generation animation cadence. A 47-cell path finishes in ~705ms.
+- **`solution_revealed: frozenset | None`** threaded through `cell_color()` and all 5 renderers' `draw()`/`_draw_cell()` (Orthogonal, Sigma, Delta, Rhombic, Upsilon). `None` = show all solution cells (animation done); a frozenset = show only those coords. Default `None` is backward-compatible — all existing callers required no changes.
+- **S key handler** now starts a fresh `SolutionAnimState` on reveal (False → True) if no generation animation is running (`anim is None`). Toggling off (True → False) clears `solution_anim` immediately for an instant hide.
+- **New-maze resets**: both `_begin_animation()` and the R key non-animate path reset `show_solution = False` and `solution_anim = None`, so a freshly generated maze never auto-reveals its solution.
+- **`_complete_animation()`** also resets solution state, so finishing a generation animation starts clean.
+- Verified: 118 tests pass; smoke test confirms 47-cell path reveals incrementally at 15ms/cell, partial renderer draw works, full reveal (`solution_revealed=None`) works.

@@ -252,12 +252,17 @@ def cell_color(
     palette,
     gradient: GradientTheme | None = None,
     trail: dict | None = None,
+    solution_revealed: frozenset | None = None,
 ) -> tuple[int, int, int]:
     """Decision chain for a cell's fill color.
 
     Mirrors ``cellBackgroundColor(...)`` in the iOS code: start > goal >
     visited > (solution overlay) > (heatmap) > default-row-gradient.
     Shared between every renderer so toggle behavior stays identical.
+
+    ``solution_revealed``: when None, all solution-path cells are shown;
+    when a frozenset, only cells whose coord is in the set are shown
+    (used during the animated reveal).
     """
     if cell.is_start:
         return START_COLOR
@@ -270,7 +275,8 @@ def cell_color(
     if cell.is_visited:
         return VISITED_COLOR
     if show_solution and cell.on_solution_path:
-        return SOLUTION_COLOR
+        if solution_revealed is None or cell.coord in solution_revealed:
+            return SOLUTION_COLOR
     if show_heatmap and max_distance > 0:
         return _heatmap_color(cell.distance, max_distance, palette)
     return _default_cell_color(cell.coord.y, total_rows, gradient)
@@ -328,7 +334,7 @@ class OrthogonalRenderer:
     def set_gradient(self, gradient: GradientTheme | None) -> None:
         self.gradient = gradient
 
-    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool, trail: list | None = None) -> None:
+    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool, trail: list | None = None, solution_revealed: frozenset | None = None) -> None:
         if not cells:
             return
         self._trail_dict: dict = {coord: i for i, coord in enumerate(trail)} if trail else {}
@@ -345,7 +351,7 @@ class OrthogonalRenderer:
         bg = self.gradient.base if self.gradient is not None else OFF_WHITE
         pygame.draw.rect(self.surface, bg, rect)
         for cell in cells:
-            self._draw_cell(cell, max_distance, total_rows, show_heatmap, show_solution)
+            self._draw_cell(cell, max_distance, total_rows, show_heatmap, show_solution, solution_revealed)
         pygame.draw.rect(self.surface, BORDER_COLOR, rect, BORDER_WIDTH)
 
     def maze_rect(self, cells: list[Cell]) -> pygame.Rect:
@@ -384,11 +390,12 @@ class OrthogonalRenderer:
         total_rows: int,
         show_heatmap: bool,
         show_solution: bool,
+        solution_revealed: frozenset | None = None,
     ) -> None:
         rect = self._cell_rect(cell.coord.x, cell.coord.y)
         pygame.draw.rect(
             self.surface,
-            cell_color(cell, max_distance, total_rows, show_heatmap, show_solution, self.palette, self.gradient, self._trail_dict),
+            cell_color(cell, max_distance, total_rows, show_heatmap, show_solution, self.palette, self.gradient, self._trail_dict, solution_revealed),
             rect,
         )
 
@@ -609,7 +616,7 @@ class SigmaRenderer:
     def set_gradient(self, gradient: GradientTheme | None) -> None:
         self.gradient = gradient
 
-    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool, trail: list | None = None) -> None:
+    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool, trail: list | None = None, solution_revealed: frozenset | None = None) -> None:
         if not cells:
             return
         self._trail_dict: dict = {coord: i for i, coord in enumerate(trail)} if trail else {}
@@ -629,7 +636,7 @@ class SigmaRenderer:
 
         for cell in cells:
             self._draw_cell(
-                cell, by_coord, linked_pairs, max_distance, total_rows, show_heatmap, show_solution
+                cell, by_coord, linked_pairs, max_distance, total_rows, show_heatmap, show_solution, solution_revealed
             )
 
         pygame.draw.rect(self.surface, BORDER_COLOR, bbox, BORDER_WIDTH)
@@ -710,12 +717,13 @@ class SigmaRenderer:
         total_rows: int,
         show_heatmap: bool,
         show_solution: bool,
+        solution_revealed: frozenset | None = None,
     ) -> None:
         q, r = cell.coord.x, cell.coord.y
         polygon = self._cell_polygon(q, r)
         pygame.draw.polygon(
             self.surface,
-            cell_color(cell, max_distance, total_rows, show_heatmap, show_solution, self.palette, self.gradient, self._trail_dict),
+            cell_color(cell, max_distance, total_rows, show_heatmap, show_solution, self.palette, self.gradient, self._trail_dict, solution_revealed),
             polygon,
         )
 
@@ -908,6 +916,7 @@ class DeltaRenderer:
         total_rows: int,
         show_heatmap: bool,
         show_solution: bool,
+        solution_revealed: frozenset | None = None,
     ) -> None:
         col, row = cell.coord.x, cell.coord.y
         is_normal = (col + row) % 2 == 0
@@ -915,7 +924,7 @@ class DeltaRenderer:
 
         pygame.draw.polygon(
             self.surface,
-            cell_color(cell, max_distance, total_rows, show_heatmap, show_solution, self.palette, self.gradient, self._trail_dict),
+            cell_color(cell, max_distance, total_rows, show_heatmap, show_solution, self.palette, self.gradient, self._trail_dict, solution_revealed),
             polygon,
         )
 
@@ -1056,7 +1065,7 @@ class RhombicRenderer:
         h = int(round(self.half_diagonal * max_y + self.diagonal))
         return pygame.Rect(self.offset_x, self.offset_y, w, h)
 
-    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool, trail: list | None = None) -> None:
+    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool, trail: list | None = None, solution_revealed: frozenset | None = None) -> None:
         valid = [c for c in cells if (c.coord.x + c.coord.y) % 2 == 0]
         if not valid:
             return
@@ -1067,7 +1076,7 @@ class RhombicRenderer:
         bg = self.gradient.base if self.gradient is not None else OFF_WHITE
         pygame.draw.rect(self.surface, bg, bbox)
         for cell in valid:
-            self._draw_cell(cell, max_distance, total_rows, show_heatmap, show_solution)
+            self._draw_cell(cell, max_distance, total_rows, show_heatmap, show_solution, solution_revealed)
         pygame.draw.rect(self.surface, BORDER_COLOR, bbox, BORDER_WIDTH)
 
     def cell_at(self, pos: tuple[int, int], cells: list[Cell]) -> Coord | None:
@@ -1115,6 +1124,7 @@ class RhombicRenderer:
         total_rows: int,
         show_heatmap: bool,
         show_solution: bool,
+        solution_revealed: frozenset | None = None,
     ) -> None:
         col, row = cell.coord.x, cell.coord.y
         polygon = self._cell_polygon(col, row)
@@ -1122,7 +1132,7 @@ class RhombicRenderer:
             self.surface,
             cell_color(
                 cell, max_distance, total_rows, show_heatmap, show_solution,
-                self.palette, self.gradient, self._trail_dict,
+                self.palette, self.gradient, self._trail_dict, solution_revealed,
             ),
             polygon,
         )
@@ -1284,7 +1294,7 @@ class UpsilonRenderer:
         h = int(round((rows - 1) * self.step + self.cell_size))
         return pygame.Rect(self.offset_x, self.offset_y, w, h)
 
-    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool, trail: list | None = None) -> None:
+    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool, trail: list | None = None, solution_revealed: frozenset | None = None) -> None:
         if not cells:
             return
         self._trail_dict: dict = {coord: i for i, coord in enumerate(trail)} if trail else {}
@@ -1294,7 +1304,7 @@ class UpsilonRenderer:
         bg = self.gradient.base if self.gradient is not None else OFF_WHITE
         pygame.draw.rect(self.surface, bg, bbox)
         for cell in cells:
-            self._draw_cell(cell, max_distance, total_rows, show_heatmap, show_solution)
+            self._draw_cell(cell, max_distance, total_rows, show_heatmap, show_solution, solution_revealed)
         pygame.draw.rect(self.surface, BORDER_COLOR, bbox, BORDER_WIDTH)
 
     def cell_at(self, pos: tuple[int, int], cells: list[Cell]) -> Coord | None:
@@ -1362,6 +1372,7 @@ class UpsilonRenderer:
         total_rows: int,
         show_heatmap: bool,
         show_solution: bool,
+        solution_revealed: frozenset | None = None,
     ) -> None:
         col, row = cell.coord.x, cell.coord.y
         is_sq = (col + row) % 2 == 1
@@ -1373,7 +1384,7 @@ class UpsilonRenderer:
             self.surface,
             cell_color(
                 cell, max_distance, total_rows, show_heatmap, show_solution,
-                self.palette, self.gradient, self._trail_dict,
+                self.palette, self.gradient, self._trail_dict, solution_revealed,
             ),
             polygon,
         )

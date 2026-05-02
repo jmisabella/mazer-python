@@ -472,6 +472,35 @@ class AnimationState:
         self.done = True
 
 
+class SolutionAnimState:
+    """Reveal solution path one cell at a time, sorted by distance from start."""
+
+    def __init__(self, solution_cells: list) -> None:
+        sorted_cells = sorted(solution_cells, key=lambda c: c.distance)
+        self.coords: list = [c.coord for c in sorted_cells]
+        self.revealed_count: int = 0
+        self.done: bool = len(self.coords) == 0
+        self._accum_ms: float = 0.0
+
+    @property
+    def revealed_set(self) -> frozenset:
+        return frozenset(self.coords[: self.revealed_count])
+
+    def tick(self, elapsed_ms: float) -> bool:
+        """Advance by elapsed_ms. Returns True when all cells are revealed."""
+        if self.done:
+            return False
+        self._accum_ms += elapsed_ms
+        steps = int(self._accum_ms / ANIM_STEP_INTERVAL_MS)
+        if steps > 0:
+            self._accum_ms -= steps * ANIM_STEP_INTERVAL_MS
+            self.revealed_count = min(self.revealed_count + steps, len(self.coords))
+        if self.revealed_count >= len(self.coords):
+            self.done = True
+            return True
+        return False
+
+
 HUD_BG = OFF_WHITE
 HUD_TITLE_COLOR = (40, 40, 40)
 HUD_HINT_COLOR = (90, 90, 90)
@@ -758,6 +787,7 @@ def main(argv: list[str] | None = None) -> None:
     animate_mode: bool = args.animate
     anim: AnimationState | None = None
     anim_maze: Maze | None = None  # new maze being animated (kept separate for cancel)
+    solution_anim: SolutionAnimState | None = None
 
     menu_state: MenuState | None = None
     menu_layout: MenuLayout | None = None
@@ -835,7 +865,7 @@ def main(argv: list[str] | None = None) -> None:
         ANIM_MAX_H — the menu already prevents this for in-game sessions; this
         guard catches the CLI ``--animate`` path on an oversized grid.
         """
-        nonlocal anim, anim_maze, solved_btn_pressed
+        nonlocal anim, anim_maze, solved_btn_pressed, show_solution, solution_anim
         if request.width > ANIM_MAX_W or request.height > ANIM_MAX_H:
             _set_hud_msg(
                 f"⚠ Too large to animate ({request.width}×{request.height}"
@@ -849,6 +879,8 @@ def main(argv: list[str] | None = None) -> None:
         anim_maze = Maze(anim_request)
         all_steps = list(anim_maze.generation_steps())
         anim = AnimationState(all_steps)
+        show_solution = False
+        solution_anim = None
         renderer.set_gradient(None)
         drag.end()
         arrows_consumed.clear()
@@ -856,13 +888,15 @@ def main(argv: list[str] | None = None) -> None:
 
     def _complete_animation() -> None:
         """Finish animation (normal end or skip) — switch to interactive play."""
-        nonlocal maze, anim, anim_maze, gradient, trail, _prev_active_coord
+        nonlocal maze, anim, anim_maze, gradient, trail, _prev_active_coord, show_solution, solution_anim
         if anim is not None:
             anim.skip()
         maze.close()
         maze = anim_maze
         anim_maze = None
         anim = None
+        show_solution = False
+        solution_anim = None
         trail.clear()
         _prev_active_coord = None
         _visited_set.clear()
@@ -982,9 +1016,16 @@ def main(argv: list[str] | None = None) -> None:
                     elif event.key == pygame.K_s:
                         if not is_repeat:
                             show_solution = not show_solution
+                            if show_solution and anim is None:
+                                solution_cells = [c for c in maze.cells() if c.on_solution_path]
+                                solution_anim = SolutionAnimState(solution_cells)
+                            else:
+                                solution_anim = None
                     elif event.key == pygame.K_r:
                         if not is_repeat:
                             solved_btn_pressed = False
+                            show_solution = False
+                            solution_anim = None
                             if animate_mode:
                                 _begin_animation()
                             else:
@@ -1099,6 +1140,9 @@ def main(argv: list[str] | None = None) -> None:
                 if anim.tick(min(dt, 32)):
                     _complete_animation()
 
+            if solution_anim is not None:
+                solution_anim.tick(min(dt, 32))
+
             if anim is not None and anim.steps:
                 cells = anim.steps[anim.current_step]
                 solved = False
@@ -1117,8 +1161,14 @@ def main(argv: list[str] | None = None) -> None:
                 _prev_active_coord = active_coord
                 active_trail = list(trail) if trail else None
 
+            solution_revealed: frozenset | None = (
+                solution_anim.revealed_set
+                if solution_anim is not None and not solution_anim.done
+                else None
+            )
+
             screen.fill((20, 20, 24))
-            renderer.draw(cells, show_heatmap=show_heatmap, show_solution=show_solution, trail=active_trail)
+            renderer.draw(cells, show_heatmap=show_heatmap, show_solution=show_solution, trail=active_trail, solution_revealed=solution_revealed)
             if solved:
                 _draw_solved_overlay(screen, renderer.maze_rect(cells), big_font, hud_font)
 

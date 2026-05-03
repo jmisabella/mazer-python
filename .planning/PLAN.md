@@ -508,7 +508,7 @@ Note: Delta uses six directions (`Up`, `UpperLeft`, `UpperRight`, `Down`, `Lower
 
 Verified: 98 passed, 0 skipped (was 92 + 1 skipped before this session — the Stage 5 placeholder skipped test is gone, likely cleared in an earlier session). Full suite ~0.35s. App smoke test under `SDL_VIDEODRIVER=dummy` with W/Q/E/Z/X/C/H/S/R keys + QUIT exits cleanly.
 
-## SESSION 13 [uncompleted]
+## SESSION 13 [completed 2026-04-30]
 ### Stage 12 — Rhombic grid rendering and play
 
 Add full support for the Rhombic maze type: rendering, key mapping, hit-testing, and integration test.
@@ -522,7 +522,39 @@ Scope:
 
 Reference: `RhombicCellView.swift`, `RhombicMazeView.swift`. Pay attention to `Cell::get_user_facing_open_walls` in the Rust (`grid.rs`) — it applies a remap for Rhombic.
 
-## SESSION 14 [uncompleted]
+#### Session 13 notes
+
+**Direction remap confirmed from `cell.rs`**: The Rust internally assigns Rhombic neighbors via cardinal directions (`Up/Right/Down/Left`) but exports them user-facing as diagonals (`Up→UpperRight, Right→LowerRight, Down→LowerLeft, Left→UpperLeft`) via `get_user_facing_open_walls`. So `cell.linked` always contains diagonal-only direction names. `make_move` receives e.g. `UpperRight`, tries it (not in `open_walls` which uses cardinals), falls back to `Up` (which IS in `open_walls`), and succeeds. This is seamless to the Python layer.
+
+**No boundary-clamp ambiguity**: Unlike Sigma, Rhombic neighbor assignment (`assign_neighbors_rhombic`) uses unambiguous deltas for each direction: `UpperRight=(+1,-1), LowerRight=(+1,+1), LowerLeft=(-1,+1), UpperLeft=(-1,-1)`. Simple `rhombic_direction` helper (same pattern as `delta_direction`) is sufficient — no candidate-offset iteration needed.
+
+**Cell existence**: Only `(x+y) % 2 == 0` cells exist. The `cells()` list from the FFI includes all width×height positions but non-existent cells have zeroed-out fields. The renderer filters to valid cells internally. The integration test uses a 9×9 grid (41 valid cells); the app default is 11×11 (61 valid cells).
+
+**Geometry** from `RhombicCellView.swift`/`RhombicMazeView.swift` (ported field-for-field):
+- `box = cell_size * sqrt(2)`, `half_diagonal = box / 2`
+- Diamond vertices: top `(cx, y0)`, right `(x0+box, cy)`, bottom `(cx, y0+box)`, left `(x0, cy)` in absolute coords
+- Cell (col, row) top-vertex at `(offset_x + col*half_diagonal, offset_y + row*half_diagonal)`
+- Container: `half_diagonal * max_x + box` × `half_diagonal * max_y + box`
+- Wall stroke: `cell_size / 7` if `cell_size >= 18`, else `cell_size / 4.8` (from `wallStrokeWidth(for:.rhombic)`)
+- Wall→edge: UpperRight=0→1, LowerRight=1→2, LowerLeft=2→3, UpperLeft=3→0
+
+**Key map** (`RHOMBIC_KEYS`): Q/E/Z/C for UpperLeft/UpperRight/LowerLeft/LowerRight only — no W/X for UP/DOWN since those aren't native Rhombic directions. Arrow chords (e.g. ↑+→) still work via `_resolve_chord` producing `UPPER_RIGHT` etc., which the Rust resolves correctly. `_KEYS_BY_TYPE` wired for Rhombic.
+
+**`_move_with_slide` disabled for Rhombic**: the slide alts table (`_SLIDE_ALTS`) maps diagonal directions to cardinal alts (e.g. RIGHT as alt for UPPER_RIGHT), which on Rhombic would cause the Rust's fallback to fire to LOWER_RIGHT — an unintended move in the wrong direction. Guard added: if `maze_type == MazeType.RHOMBIC`, return False immediately after the first `maze.move()` attempt and let the Rust handle its own fallbacks internally.
+
+**Drag sector** (`_RHOMBIC_SECTOR_DIRECTIONS`): 4 × 90° sectors, boundaries at the cardinal axes. `sector = int(angle / 90) % 4` maps cleanly: 0°–90° → LOWER_RIGHT, 90°–180° → LOWER_LEFT, 180°–270° → UPPER_LEFT, 270°–360° → UPPER_RIGHT.
+
+**Start/goal validity guard** in `_build_request`: for Rhombic, if `(goal.x + goal.y) % 2 != 0`, decrement `goal_x` by 1. Default 11×11 grid → goal=(10,10), sum=20 ✓, so the guard never fires for the default; it protects arbitrary CLI dimensions (e.g. `--width 10 --height 9` → goal=(9,8), sum=17 odd → adjusted to (8,8)).
+
+**Menu**: `MazeType.RHOMBIC` added to `MenuState.SUPPORTED_TYPES`.
+
+**App defaults**: `_DEFAULTS[RHOMBIC] = (36, 11, 11)` — cell_size 36 gives `box ≈ 51px` for comfortable clicking; 11×11 ensures goal=(10,10) always satisfies the parity constraint.
+
+**Tests** (9 new across two files): `test_rhombic_renderer_draws_without_error`, `test_rhombic_cell_at_resolves_clicks` (5 coord spots + out-of-bounds), `test_solve_rhombic_maze_by_following_solution_path` (integration), updated `test_make_renderer_dispatch` (Rhombic now asserts `RhombicRenderer`, Upsilon is the new `NotImplementedError` case).
+
+Verified: 107 passed, 1 skipped (was 98 + 0 before this session). App smoke test under `SDL_VIDEODRIVER=dummy` with Q/E/Z/C keys + H/S/R exits cleanly.
+
+## SESSION 14 [completed 2026-04-30]
 ### Stage 13 — Upsilon (octagon + square) grid rendering and play
 
 Add full support for the Upsilon maze type: rendering, key mapping, hit-testing, and integration test.
@@ -535,3 +567,185 @@ Scope:
 5. **Tests**: solver integration test + renderer smoke test + `cell_at` test covering both cell shapes.
 
 Reference: `UpsilonCellView.swift`, `UpsilonMazeView.swift`, `UpsilonMazeView.swift`. Note `is_square` and `orientation` on the `Cell` dataclass — they were added in Stage 3 for exactly this purpose.
+
+#### Session 14 notes
+
+**Cell type rule**: `is_square` when `(col + row) % 2 == 1` (from Rust `initialize_upsilon_cells`: `row % 2 != col % 2`). This is the standard checkerboard where octagons sit at even-sum positions and squares at odd-sum.
+
+**Geometry** from `UpsilonCellView.swift` / `UpsilonMazeView.swift` / `MazeLayoutMetrics.swift` (ported field-for-field):
+- `squareSize = octagonSize * (sqrt(2) - 1)` — from `computeCellSizes`
+- `step = octagonSize * sqrt(2) / 2` = `(octagonSize + squareSize) / 2` — derived from iOS LazyVGrid horizontal spacing `-(octagonSize - squareSize) / 2` and frame width `octagonSize`; same value applies vertically (frame height `octagonSize * sqrt(2) / 2`, minus the sub-pixel `-1` spacing)
+- Cell center: `cx = col * step + octagonSize/2`, `cy = row * step + octagonSize/2`
+- Bounding box: `(cols-1)*step + octagonSize` × `(rows-1)*step + octagonSize`
+- Octagon: r = octagonSize/2, k = 2r/(2+sqrt(2)); 8 vertices centered at (cx, cy) in the order described in `OctagonShape.path(in:)`
+- Square: side `squareSize`, centered at (cx, cy); vertices at ±squareSize/2 in both axes
+- Wall stroke: denominator 12 at `cell_size >= 28`, else 16 (from `wallStrokeWidth(for:.upsilon)`)
+
+**Direction → edge** (from `WallView` in `UpsilonCellView.swift`):
+- Octagon: Up=(0,1), UpperRight=(1,2), Right=(2,3), LowerRight=(3,4), Down=(4,5), LowerLeft=(5,6), Left=(6,7), UpperLeft=(7,0)
+- Square: Up=(0,1), Right=(1,2), Down=(2,3), Left=(3,0) — cardinal only
+
+**No boundary-clamp ambiguity**: Unlike Sigma, Upsilon neighbor assignment (`assign_neighbors_upsilon`) uses unambiguous deltas per direction for both cell types. The `upsilon_direction` helper uses a simple reverse-map of `UPSILON_OFFSETS` — no candidate-offset iteration needed.
+
+**Direction→offset for both cell types**: Up=(0,-1), Right=(1,0), Down=(0,1), Left=(-1,0), UpperRight=(1,-1), LowerRight=(1,1), LowerLeft=(-1,1), UpperLeft=(-1,-1). Squares simply never have diagonal links, but the offset table is the same.
+
+**Key map**: `UPSILON_KEYS = SIGMA_KEYS` (W/X/Q/E/Z/C + arrow chords). Octagons have all 8 directions; sending a diagonal key to a square cell goes to the Rust `make_move` which tries the diagonal (not a neighbor) then falls back to the cardinal component — producing the same "corner rounding" feel as orthogonal's slide alts.
+
+**Drag sectors**: 8 sectors (same as orthogonal/delta) — added `MazeType.UPSILON` to the `if maze_type in (MazeType.ORTHOGONAL, MazeType.DELTA)` branch in `_direction_from_vector`.
+
+**No `_move_with_slide` special case**: Standard `_SLIDE_ALTS` applies. For square cells, diagonal slide alts fall back to cardinals via the Rust — same implicit behavior as orthogonal square cells getting a diagonal chord.
+
+**App defaults**: `_DEFAULTS[UPSILON] = (40, 10, 10)` — cell_size 40 gives step ≈ 28px; 10×10 produces a ~295×295 painted region (comparable to the other maze types at their defaults). Goal = (9,9); no parity constraint needed since all cells exist.
+
+**Menu**: `MazeType.UPSILON` added to `MenuState.SUPPORTED_TYPES`.
+
+**`cell_at` hit-testing**: Closest-center + point-in-polygon (same two-pass pattern as Sigma/Delta). The octagon overflows its step-box vertically by ~14.6% of cell_size (because `r = octagonSize/2 > step/2 = octagonSize*sqrt(2)/4`), so adjacent-row octagons physically overlap; the closest-center pass assigns the click to the nearer cell, and the polygon check verifies it's inside the correct shape.
+
+**Tests** (5 new): `test_upsilon_renderer_draws_without_error` (smoke, both heatmap on/off), `test_upsilon_cell_at_resolves_clicks` (octagon and square cells + out-of-bounds), updated `test_make_renderer_dispatch` (Upsilon now returns `UpsilonRenderer` instead of raising), `test_solve_upsilon_maze_by_following_solution_path` (integration).
+
+Verified: 110 passed, 1 skipped (was 107 + 0 before this session). App smoke test under `SDL_VIDEODRIVER=dummy` with H/S/R/Esc exits cleanly. Full suite ~0.51s.
+
+## SESSION 15 [completed 2026-04-30]
+### Stage 14 — Maze generation animation
+
+Add an in-game option to animate maze generation step-by-step, matching the iOS `MazeGenerationAnimationView` behavior.
+
+Reference: `.planning/referenced_resources/iOS_app/mazer-ios/Views/MazeGenerationAnimationView.swift`.
+
+**How it works in iOS**: When triggered, the app generates with `capture_steps: true`, receives an array of cell-state snapshots, then renders each snapshot through the normal maze view at 15ms per frame. The animation plays to completion and then the final interactive maze is shown. A cancel button (×) skips the animation and jumps to the final state immediately.
+
+**Python scope**:
+
+1. **`G` key toggles "animate next generation"** mode. The HUD shows a visual indicator when the mode is active (e.g. `A anim:on`). The toggle is sticky — it persists until the user presses `G` again, so subsequent `R`/`N` regenerations also animate.
+
+2. **Triggering animation**: When animation mode is on and the user presses `R`/`N` (or first launch with a `--animate` CLI flag), generate the maze with `capture_steps=True` and enter an animation loop instead of the normal interactive loop:
+    - Use `maze.generation_steps()` which lazily yields `list[Cell]` per step.
+    - Preload all steps into a list up front (the steps are already computed by the Rust; `generation_steps()` just copies them from FFI memory into Python objects one by one). Do this once at animation start, not per frame.
+    - Draw each step's cell list through the existing renderer at the normal 60fps tick, advancing one step every `ANIM_STEP_INTERVAL_MS = 15` ms. At 60fps each frame is ~16ms, so advance one step per frame; if the interval is ever shorter use the clock's elapsed time to advance multiple steps at once.
+    - During animation, H/S overlays still work (toggle them and they apply to the current frame on the next draw).
+    - `Space`/`Enter`/mouse-click skips to the final state immediately (jumps to the last step and transitions to normal play). `Esc` cancels and goes back to the previous interactive maze (does **not** quit). Arrow keys and gameplay movement are ignored during animation.
+    - After the last step completes normally, play a brief "done" visual cue (flash the border green for one frame, or just transition to normal play — keep it simple).
+
+3. **State machine in `app.py`**: Add an `AnimationState` dataclass (or a few plain variables) alongside the existing game-loop state. The main loop already has precedence tiers (menu > solved > gameplay); add `animation` as the next tier above gameplay. During animation the event handling is simplified: only Space/Enter/click (skip), G (re-toggle), Esc (cancel), H, S, and QUIT are processed.
+
+4. **`--animate` CLI flag** (optional, boolean): if present, animate the first maze automatically on launch.
+
+5. **No changes needed to the Rust FFI, `Maze` wrapper, or renderers.** `Maze.generation_steps()` already exists (Stage 3) and already yields `list[Cell]` per step. The renderers already render any `list[Cell]` correctly — generation step cells include `is_visited`, `is_active`, `is_start`, `is_goal` fields so the heatmap and solution overlays work naturally during playback (though solution path isn't computed mid-generation, so `on_solution_path` will be False for all intermediate frames, which is correct).
+
+6. **Performance note**: For a 20×20 orthogonal maze, `generation_steps()` yields up to 400 steps × ~400 cells = 160 k Python Cell objects. Pre-loading them all takes ~0.05s and fits comfortably in memory. No streaming required.
+
+**Palette during animation**: iOS uses `wetAsphaltPalette` (a dark blue-gray) during animation regardless of the user's gradient choice. Python equivalent: during animation, call `renderer.set_gradient(None)` so cells fall through to the OFF_WHITE row-gradient default (no random color burst mid-animation). Restore the gradient after animation ends.
+
+**Tests**:
+- `tests/test_ui.py`: `test_animation_steps_advance_per_frame` — construct an `AnimationState` with a known step list, call `tick(elapsed_ms)` three times, assert `current_step` advances correctly. `test_animation_skip_jumps_to_last` — call `skip()`, assert `current_step == len(steps) - 1` and `done == True`.
+- No new integration tests needed — generation steps are already exercised in `test_maze.py`.
+
+**Acceptance**: `G` during play shows `anim:on` in HUD. `R` generates a new maze and animates it step-by-step, all five maze types. Space skips to the final playable maze. `G` again disables animation for the next `R`.
+
+#### Session 15 notes
+
+**State machine** — animation is a new tier between menu and normal gameplay in the event loop priority chain: menu > animation > solved > gameplay. `anim: AnimationState | None` and `anim_maze: Maze | None` are separate from `maze` (the current interactive maze) so Esc-cancel safely restores the old state without data loss. On completion (normal end or skip), `maze.close()` destroys the old maze and `maze = anim_maze` promotes the animation target to the interactive maze.
+
+**`AnimationState` class** — pure Python, no FFI or Pygame dependency. Holds `steps: list`, `current_step: int`, `done: bool`, and a private `_accum_ms` float accumulator. `tick(elapsed_ms)` advances `current_step` by `int(accum / 15.0)` steps at a time (handles multi-step advance when a frame takes > 15ms) and returns True when the last step is reached. `skip()` is idempotent. Placed in `app.py` since it's purely a UI timing concern.
+
+**`_begin_animation()` closure** — uses `dataclasses.replace(request, capture_steps=True)` to create the animation request, pre-loads all steps with `list(anim_maze.generation_steps())`, then calls `renderer.set_gradient(None)` to disable the random-color gradient during playback (iOS uses `wetAsphaltPalette` for animation frames; Python equivalent is the OFF_WHITE row gradient that shows when gradient is None). The old `maze` is untouched during animation; `anim_maze` is the new maze.
+
+**`_complete_animation()` and `_cancel_animation()`** — both restore the gradient (`renderer.set_gradient(gradient)`) after the animation ends. `_complete_animation` closes the old `maze`, promotes `anim_maze`, and generates a new gradient. `_cancel_animation` closes `anim_maze` and leaves `maze` unchanged.
+
+**`dt` tracking** — `dt: int = 0` initialised before the loop; `dt = clock.tick(60)` at the bottom of the loop captures the actual frame time. `anim.tick(dt)` runs immediately after event processing using the *previous* frame's dt — off by one frame but imperceptible at 60fps/15ms step intervals.
+
+**First-launch animation** — `if args.animate: _begin_animation()` called after the initial `Maze(request)` is created, before the event loop. The `--animate` CLI flag also sets `animate_mode = True` so subsequent R/N also animate.
+
+**HUD changes** — `_draw_hud` gains `animate_mode: bool = False` and `anim_info: str | None = None` parameters. When `anim_info` is provided (during animation), it replaces the hint line entirely with `"Animating N/total — Space/click to skip   Esc cancel"`. Otherwise, the hint line gains `G anim:on/off` between the existing controls.
+
+**G key** in both animation tier (toggles mode for the *next* R/N) and normal gameplay (same). Space/Enter/click in animation tier → skip. Esc in animation tier → cancel (not quit).
+
+**Solved-screen regeneration** updated for animation mode: Space/Enter KEYUP when solved and click-on-solved both call `_begin_animation()` when `animate_mode` is True, matching the `R` key behavior.
+
+**Tests** (4 new in `test_ui.py`):
+- `test_animation_steps_advance_per_frame` — verifies tick() advances step correctly including multi-step ticks, plus sub-interval accumulation.
+- `test_animation_skip_jumps_to_last` — skip() sets `current_step == len-1` and `done == True`.
+- `test_animation_completes_at_last_step` — large tick clamps to last step and returns True; subsequent ticks are no-ops.
+- `test_animation_smoke_with_real_maze` — runs a 5×5 Orthogonal maze with `capture_steps=True`, wraps steps in `AnimationState`, ticks to completion; verifies no FFI errors across the full stack.
+
+Verified: 114 passed, 1 skipped (was 110 + 1 before this session). Full suite ~0.41s. Interactive acceptance (visual animation playback, G toggle, Space skip) requires the user at a real display.
+
+## Session 16 [completed 2026-05-01]
+### Prevent oversizing board based on screen dimensions
+
+Is this even possible? I know it is on an iPhone but do not know for Mac, Windows, etc... screens. But if it is possible, don't allow user to make width or height exceed screen size. Actually, I'm also considering making a max width and height for animation mode at the very least, as when there are too many cells sometimes, in particular Aldous Broder board, takes WAY too long to generate with screen animation mode enabled when drawing the animation. Let's plan this one carefully
+
+#### Session 16 notes
+
+**Screen-size detection**: `pygame.display.get_desktop_sizes()` (with `pygame.display.Info()` as fallback) is called after `pygame.init()` and before the first `set_mode()` on every platform (macOS, Linux, Windows). Returns the primary display resolution. Applied margins: 95% width, 90% height (leaves room for dock/taskbar). Result: `screen_max_sizes: dict[MazeType, tuple[int,int]]` computed once in `main()` and threaded to the menu.
+
+**`_max_grid_for_screen()`** (new pure function in `app.py`): inverts each branch of the existing `_window_size()` formula analytically — one branch per maze type. Results are clamped to minimum 2 to guard against degenerate tiny displays. Placed alongside `_window_size()` for discoverability.
+
+**Screen limit enforcement**:
+- **CLI args**: after `_build_request()` in `main()`, width/height are compared against `screen_max_sizes[maze_type]`. If exceeded, `dataclasses.replace()` builds a corrected request and a warning is printed to stderr. Goal coordinate is also clamped + Rhombic parity-nudge applied if needed.
+- **In-game menu**: `MenuState.__init__` now accepts `max_sizes: dict | None`, `animate_mode: bool`, and `anim_max_side: int`. New `_effective_max()` method merges screen max with the per-side animation cap. Width/height are clamped on open and on every `_change_value()` call. Type changes also re-clamp (different maze types have different pixel footprints per cell, so SIGMA's screen max differs from ORTHOGONAL's).
+
+**Animation cell limit**: `ANIM_MAX_SIDE = 16` (16×16 = 256 cells — conservative enough that Aldous-Broder's O(n log n) step count stays manageable). Two enforcement layers:
+1. **Menu** (primary): when `animate_mode=True`, `_effective_max()` caps both dimensions to `anim_max_side`. Menu draws an info note in the error-area slot: `"Anim mode active — max 16×16 per side"` in blue when animate mode is on and no error exists.
+2. **`_begin_animation()` guard** (belt-and-suspenders for CLI `--animate` on an oversized grid): if `request.width > ANIM_MAX_SIDE or request.height > ANIM_MAX_SIDE`, sets a 4-second transient HUD warning (orange text in the hint line) and returns immediately without starting animation. The interactive maze remains unchanged.
+
+**Transient HUD message**: `_hud_msg: str` + `_hud_msg_until: int` (ticks) maintained in `main()` scope. `_set_hud_msg(msg, duration_ms=4000)` closure sets both. Each render frame: if `pygame.time.get_ticks() < _hud_msg_until`, passes `_hud_msg` to `_draw_hud()` which renders it in orange and takes priority over both the anim-info string and the normal hint line.
+
+**`draw_menu()` layout note**: the existing `_ERROR_H` row at the bottom of the panel is reused for the anim-mode note — no panel height change needed. Error text (red) and anim note (blue) are mutually exclusive: error wins when set.
+
+Verified: 118 passed (was 114 before this session; +4 new tests: `test_menu_screen_size_clamps_dimensions`, `test_menu_anim_mode_clamps_to_anim_max_side`, `test_menu_type_change_reclamps_dimensions`, plus the animation completes/skip tests were already in the prior count). Full suite ~1.6s. Interactive acceptance (screen clamping, menu anim limit, HUD warning) requires user at a real display.
+
+## Session 17 [completed 2026-05-02]
+### Pink trail gradient for recently visited cells
+
+The 2-3 cells immediately behind the player's current position now display progressively lighter shades of pink, fading toward an even lighter pink on the current cell itself.
+
+#### Session 17 notes
+
+**Color scheme** (from darkest trail to lightest):
+- Normal visited cells: `VISITED_COLOR = (255, 120, 180)` — unchanged
+- 3 steps back (farthest trail): `(255, 140, 192)`
+- 2 steps back: `(255, 165, 205)`
+- 1 step back (closest to current): `(255, 193, 222)`
+- Current cell background: `ACTIVE_CELL_COLOR = (255, 215, 235)` — lightest pink
+
+**Trail tracking** (`app.py`): A `deque(maxlen=3)` named `trail` holds the last 3 vacated cell coords, with index 0 being the most recently vacated (closest to current). A `_prev_active_coord` tracks the active coord from the previous frame. Each frame (non-animation only), when the active coord changes, the old coord is pushed to the front of the deque via `appendleft`. Trail is cleared and `_prev_active_coord` reset to `None` on every maze reset: menu new-maze, `_complete_animation`, and both solved-screen new-maze paths (Space/Enter and click).
+
+**Renderer integration**: `cell_color()` gained a `trail: dict | None` parameter (a `{Coord: int}` lookup where the int is the trail index). The decision chain now checks `cell.is_active` before `cell.is_visited`, returning `ACTIVE_CELL_COLOR` for the current cell; trail cells are caught before `is_visited` returns the standard pink. Each renderer's `draw()` builds `self._trail_dict` from the passed `trail` list and each `_draw_cell()` passes it to `cell_color()`. Animation frames pass `trail=None` (no player movement during animation).
+
+Verified: 118 passed (no new tests — rendering changes are visual only). Full suite ~0.5s.
+
+## Session 18 [completed 2026-05-02]
+### Animate solution path when enabled instead as opposed to showing entire thing at once
+
+In the iOS app we animate the solution one cell at a time but in rapid succession and it looks visually appealing. I'm hoping we might be able to accomplish some similar effect here.
+
+#### Session 18 notes
+
+- **`SolutionAnimState` class** added to `app.py` (after `AnimationState`). Accepts solution-path cells, sorts them by `distance` (start=0 → goal=max), and reveals one coord per `ANIM_STEP_INTERVAL_MS` (15ms) tick — matching the maze generation animation cadence. A 47-cell path finishes in ~705ms.
+- **`solution_revealed: frozenset | None`** threaded through `cell_color()` and all 5 renderers' `draw()`/`_draw_cell()` (Orthogonal, Sigma, Delta, Rhombic, Upsilon). `None` = show all solution cells (animation done); a frozenset = show only those coords. Default `None` is backward-compatible — all existing callers required no changes.
+- **S key handler** now starts a fresh `SolutionAnimState` on reveal (False → True) if no generation animation is running (`anim is None`). Toggling off (True → False) clears `solution_anim` immediately for an instant hide.
+- **New-maze resets**: both `_begin_animation()` and the R key non-animate path reset `show_solution = False` and `solution_anim = None`, so a freshly generated maze never auto-reveals its solution.
+- **`_complete_animation()`** also resets solution state, so finishing a generation animation starts clean.
+- Verified: 118 tests pass; smoke test confirms 47-cell path reveals incrementally at 15ms/cell, partial renderer draw works, full reveal (`solution_revealed=None`) works.
+
+## Session 19 [completed 2026-05-02]
+### Rework the menu: Make it look more polished and professional, perhaps a dark mode version would look better. Also, (and VERY importantly), Game Grid types and Maze Algorithms should all have accompanying educational descriptive summary
+Regarding the mention to rework the menu: the current menu works but feels a bit unpolished. Also, the current left/right navigation between enumerated values, does it not adhere to my desire to add the accompanying summaries to Grid Type and Maze Algorithm? I feel these accompanying summaries are good to educate players the differences between the algorithms especially, as well as the different grid types. Below are where you'll find the literal copies I want to use for these summaries:
+- Grid Type copy to use: .planning/referenced_resources/iOS_app/mazer-ios/Models/MazeType.swift
+- Maze Algorithm copy to use: .planning/referenced_resources/iOS_app/mazer-ios/Models/MazeAlgorithm.swift
+
+#### Session 19 notes
+
+**Dark mode palette**: replaced the light-mode `(245,245,250)` panel with a near-black blue-grey `(22,24,30)` panel, indigo focus highlight, vivid indigo arrows, and high-contrast near-white text. Error color bumped to `(255,85,85)` for visibility on the dark background.
+
+**Educational description panels**: two fixed-height text areas added below the Grid Type and Algorithm rows — always visible, brightness tied to row focus (`_DESC_BRIGHT` when focused, `_DESC_DIM` when not). Descriptions update immediately as the user cycles ‹ ›. Type descriptions (~1 sentence) get 48px; algorithm descriptions (~2-3 sentences) get 76px. Greedy word-wrap helper `_wrap_text` handles line breaking.
+
+**Human-readable algorithm display names**: the raw FFI values like "RecursiveBacktracker" replaced with "Recursive Backtracker", "Aldous Broder", "Kruskal's", "Wilson's", etc. — exact text from `MazeAlgorithm.swift`'s `displayName` property. Stored in `_ALGO_DISPLAY_NAME` dict, used in both the nav row and the `set_generation_error` message.
+
+**Algorithm compatibility filtering** (from `MazeAlgorithm.availableAlgorithms`): `_ALGO_EXCLUSIONS` dict maps each maze type to a frozenset of excluded algorithms. Orthogonal allows all 13; Rhombic excludes 6 (BinaryTree, Sidewinder, Ellers, GrowingTreeNewest, GrowingTreeRandom, HuntAndKill); Delta/Sigma/Upsilon exclude 4 (BinaryTree, Sidewinder, Ellers, RecursiveDivision). `MenuState._compatible_algos` property returns the filtered list for the current type. `algo_idx` indexes into this filtered list — when the type changes, the current algorithm is preserved if still compatible, else resets to index 0. Protects against saved-config edge cases (incompatible algo in request falls back to 0 on open).
+
+**Layout changes**: panel width 460→520px; `_MENU_H` grew by ~156px to ~490px for the two description areas. `_MENU_MIN_WINDOW_W`/`_MENU_MIN_WINDOW_H` in `app.py` bumped to 560/640 to ensure the taller panel is always fully visible. `draw_menu` refactored with two helper functions — `_draw_nav_row` (eliminates the repeated row-drawing loop) and `_draw_desc_area` (renders wrapped text in a fixed rect).
+
+**Tests**: 125 passed (was 118; +7 new: algo filtering for Rhombic/Orthogonal, type-change algo re-seating, incompatible-in-request fallback, display name format, descriptions coverage). Two existing tests updated to assert on `_compatible_algos[idx]` rather than the full `ALGORITHMS` list index. `test_menu_draw_produces_content` surface bumped to 700×700. Interactive acceptance (visual dark menu, descriptions rendering, algo filtering) requires user at a real display.
+

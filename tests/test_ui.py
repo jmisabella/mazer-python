@@ -142,16 +142,118 @@ def test_delta_cell_at_resolves_clicks() -> None:
         assert renderer.cell_at((-5, -5), cells) is None
 
 
+def test_rhombic_renderer_draws_without_error() -> None:
+    """A small rhombic maze should render diamonds + walls + active marker cleanly."""
+    from mazer.ui.renderer import RhombicRenderer
+
+    surface = pygame.Surface((400, 400))
+    request = MazeRequest(
+        maze_type=MazeType.RHOMBIC,
+        width=7,
+        height=7,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0),
+        goal=Coord(6, 6),
+    )
+    with Maze(request) as m:
+        renderer = RhombicRenderer(surface, cell_size=30)
+        renderer.draw(m.cells(), show_heatmap=False, show_solution=False)
+        renderer.draw(m.cells(), show_heatmap=True, show_solution=True)
+    assert _surface_has_content(surface)
+
+
+def test_rhombic_cell_at_resolves_clicks() -> None:
+    """Clicking at the center of a rhombic diamond resolves to that cell's coord."""
+    import math
+    from mazer.ui.renderer import RhombicRenderer
+
+    cell_size = 40
+    surface = pygame.Surface((600, 600))
+    request = MazeRequest(
+        maze_type=MazeType.RHOMBIC,
+        width=7,
+        height=7,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0),
+        goal=Coord(6, 6),
+    )
+    with Maze(request) as m:
+        cells = m.cells()
+        renderer = RhombicRenderer(surface, cell_size=cell_size)
+        # Test only valid rhombic cells (x+y even).
+        for coord in (Coord(0, 0), Coord(2, 0), Coord(1, 1), Coord(4, 2), Coord(6, 6)):
+            cx, cy = renderer._cell_center(coord.x, coord.y)
+            result = renderer.cell_at((int(round(cx)), int(round(cy))), cells)
+            assert result == coord, f"cell_at center of {coord} returned {result}"
+        # A click well outside the maze rect returns None.
+        assert renderer.cell_at((-10, -10), cells) is None
+
+
+def test_upsilon_renderer_draws_without_error() -> None:
+    """A small upsilon maze should render octagons + squares + walls cleanly."""
+    from mazer.ui.renderer import UpsilonRenderer
+
+    surface = pygame.Surface((400, 400))
+    request = MazeRequest(
+        maze_type=MazeType.UPSILON,
+        width=6,
+        height=6,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0),
+        goal=Coord(5, 5),
+    )
+    with Maze(request) as m:
+        renderer = UpsilonRenderer(surface, cell_size=40)
+        renderer.draw(m.cells(), show_heatmap=False, show_solution=False)
+        renderer.draw(m.cells(), show_heatmap=True, show_solution=True)
+    assert _surface_has_content(surface)
+
+
+def test_upsilon_cell_at_resolves_clicks() -> None:
+    """Clicking at the center of an upsilon cell resolves to that cell's coord.
+
+    Tests both octagon cells (col+row even) and square cells (col+row odd).
+    """
+    import math
+    from mazer.ui.renderer import UpsilonRenderer
+
+    cell_size = 40
+    surface = pygame.Surface((500, 500))
+    request = MazeRequest(
+        maze_type=MazeType.UPSILON,
+        width=6,
+        height=6,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0),
+        goal=Coord(5, 5),
+    )
+    with Maze(request) as m:
+        cells = m.cells()
+        renderer = UpsilonRenderer(surface, cell_size=cell_size)
+        # Octagon cells: (col+row) % 2 == 0
+        for coord in (Coord(0, 0), Coord(2, 0), Coord(0, 2), Coord(4, 4)):
+            cx, cy = renderer._cell_center(coord.x, coord.y)
+            result = renderer.cell_at((int(round(cx)), int(round(cy))), cells)
+            assert result == coord, f"octagon cell_at center of {coord} returned {result}"
+        # Square cells: (col+row) % 2 == 1
+        for coord in (Coord(1, 0), Coord(0, 1), Coord(3, 2)):
+            cx, cy = renderer._cell_center(coord.x, coord.y)
+            result = renderer.cell_at((int(round(cx)), int(round(cy))), cells)
+            assert result == coord, f"square cell_at center of {coord} returned {result}"
+        # A click outside the maze rect returns None.
+        assert renderer.cell_at((-10, -10), cells) is None
+
+
 def test_make_renderer_dispatch() -> None:
     """The factory returns a renderer matching the maze type, or raises."""
-    from mazer.ui.renderer import DeltaRenderer, OrthogonalRenderer, SigmaRenderer, make_renderer
+    from mazer.ui.renderer import DeltaRenderer, OrthogonalRenderer, RhombicRenderer, SigmaRenderer, UpsilonRenderer, make_renderer
 
     surface = pygame.Surface((100, 100))
     assert isinstance(make_renderer(MazeType.ORTHOGONAL, surface, 20), OrthogonalRenderer)
     assert isinstance(make_renderer(MazeType.SIGMA, surface, 20), SigmaRenderer)
     assert isinstance(make_renderer(MazeType.DELTA, surface, 20), DeltaRenderer)
-    with pytest.raises(NotImplementedError):
-        make_renderer(MazeType.RHOMBIC, surface, 20)
+    assert isinstance(make_renderer(MazeType.RHOMBIC, surface, 20), RhombicRenderer)
+    assert isinstance(make_renderer(MazeType.UPSILON, surface, 20), UpsilonRenderer)
 
 
 # --- Chord arrow resolver -------------------------------------------------
@@ -499,7 +601,7 @@ def test_menu_initial_state_mirrors_request() -> None:
     )
     state = MenuState(request)
     assert state.type_idx == MenuState.SUPPORTED_TYPES.index(MazeType.SIGMA)
-    assert state.algo_idx == MenuState.ALGORITHMS.index(Algorithm.WILSONS)
+    assert state._compatible_algos[state.algo_idx] == Algorithm.WILSONS
     assert state.width == 8
     assert state.height == 6
     assert state.section == MenuState.SECTION_TYPE
@@ -568,7 +670,7 @@ def test_menu_right_changes_value() -> None:
     state.section = MenuState.SECTION_ALGO
     orig = state.algo_idx
     state.handle_keydown(pygame.K_RIGHT)
-    assert state.algo_idx == (orig + 1) % len(MenuState.ALGORITHMS)
+    assert state.algo_idx == (orig + 1) % len(state._compatible_algos)
 
     # Cycle algorithm back.
     state.handle_keydown(pygame.K_LEFT)
@@ -605,7 +707,7 @@ def test_menu_width_height_clamped_at_bounds() -> None:
 
 
 def test_menu_generate_returns_request() -> None:
-    """Enter on the Generate section closes the menu and returns a MazeRequest."""
+    """Enter (press then release) closes the menu and returns a MazeRequest."""
     from mazer.ui.menu import MenuState
 
     request = MazeRequest(
@@ -615,11 +717,15 @@ def test_menu_generate_returns_request() -> None:
         start=Coord(0, 0), goal=Coord(6, 7),
     )
     state = MenuState(request)
-    # Navigate to Generate.
-    while state.section != MenuState.SECTION_GENERATE:
-        state.handle_keydown(pygame.K_DOWN)
 
+    # KEYDOWN shows pressed state, does not generate yet.
     open_, new_req = state.handle_keydown(pygame.K_RETURN)
+    assert open_ is True
+    assert new_req is None
+    assert state.btn_pressed
+
+    # KEYUP fires generate.
+    open_, new_req = state.handle_keyup(pygame.K_RETURN)
     assert open_ is False
     assert new_req is not None
     assert new_req.maze_type == MazeType.ORTHOGONAL
@@ -655,15 +761,16 @@ def test_menu_generate_reflects_changed_selections() -> None:
         state.handle_keydown(pygame.K_RIGHT)
 
     state.section = MenuState.SECTION_GENERATE
-    _, new_req = state.handle_keydown(pygame.K_RETURN)
+    state.handle_keydown(pygame.K_RETURN)   # press → show visual
+    _, new_req = state.handle_keyup(pygame.K_RETURN)  # release → generate
     assert new_req is not None
     assert new_req.maze_type == MazeType.SIGMA
     assert new_req.width == 6
     assert new_req.height == 7
 
 
-def test_menu_enter_on_non_generate_does_not_close() -> None:
-    """Pressing Enter on any row other than Generate keeps the menu open."""
+def test_menu_enter_keydown_shows_pressed_without_generating() -> None:
+    """Enter KEYDOWN (from any section) shows Generate as pressed but does not generate."""
     from mazer.ui.menu import MenuState
 
     request = MazeRequest(
@@ -675,8 +782,10 @@ def test_menu_enter_on_non_generate_does_not_close() -> None:
     state = MenuState(request)
     assert state.section == MenuState.SECTION_TYPE
     open_, req = state.handle_keydown(pygame.K_RETURN)
-    assert open_ is True
-    assert req is None
+    assert open_ is True    # menu stays open
+    assert req is None      # not generated yet
+    assert state.btn_pressed
+    assert state.section == MenuState.SECTION_GENERATE
 
 
 def test_menu_set_generation_error_focuses_algo() -> None:
@@ -724,7 +833,7 @@ def test_menu_draw_produces_content() -> None:
         algorithm=Algorithm.RECURSIVE_BACKTRACKER,
         start=Coord(0, 0), goal=Coord(9, 9),
     )
-    surface = pygame.Surface((600, 500))
+    surface = pygame.Surface((700, 700))
     font = pygame.font.SysFont(None, 22)
     state = MenuState(request)
     layout = draw_menu(surface, state, font)
@@ -821,6 +930,152 @@ def test_menu_click_generate_button_returns_request() -> None:
     assert req is not None
 
 
+def test_menu_space_keydown_sets_btn_pressed() -> None:
+    """Space KEYDOWN shows the Generate button as pressed without generating."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    state = MenuState(request)
+    open_, req = state.handle_keydown(pygame.K_SPACE)
+    assert open_ is True        # menu stays open
+    assert req is None          # not generated yet
+    assert state.btn_pressed    # pressed visual is active
+    assert state.section == MenuState.SECTION_GENERATE
+
+
+def test_menu_space_keyup_generates() -> None:
+    """Space KEYUP after KEYDOWN fires Generate and closes the menu."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    state = MenuState(request)
+    state.handle_keydown(pygame.K_SPACE)   # press
+    open_, req = state.handle_keyup(pygame.K_SPACE)  # release
+    assert open_ is False
+    assert req is not None
+    assert not state.btn_pressed
+
+
+def test_menu_space_keyup_without_keydown_is_noop() -> None:
+    """KEYUP for space without a preceding KEYDOWN is ignored."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    state = MenuState(request)
+    open_, req = state.handle_keyup(pygame.K_SPACE)
+    assert open_ is True
+    assert req is None
+
+
+def test_menu_mousedown_on_generate_sets_btn_pressed() -> None:
+    """MOUSEBUTTONDOWN on the Generate button shows pressed state, does not generate."""
+    from mazer.ui.menu import MenuState, draw_menu
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    surface = pygame.Surface((600, 500))
+    font = pygame.font.SysFont(None, 22)
+    state = MenuState(request)
+    layout = draw_menu(surface, state, font)
+
+    btn = layout.generate_btn
+    open_, req = state.handle_mousedown((btn.centerx, btn.centery), layout)
+    assert open_ is True    # menu stays open
+    assert req is None      # not fired yet
+    assert state.btn_pressed
+
+
+def test_menu_mouseup_on_generate_fires() -> None:
+    """MOUSEBUTTONUP over Generate (after mousedown) closes the menu and returns a request."""
+    from mazer.ui.menu import MenuState, draw_menu
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    surface = pygame.Surface((600, 500))
+    font = pygame.font.SysFont(None, 22)
+    state = MenuState(request)
+    layout = draw_menu(surface, state, font)
+
+    btn = layout.generate_btn
+    state.handle_mousedown((btn.centerx, btn.centery), layout)
+    open_, req = state.handle_mouseup((btn.centerx, btn.centery), layout)
+    assert open_ is False
+    assert req is not None
+    assert not state.btn_pressed
+
+
+def test_menu_mouseup_outside_generate_does_not_fire() -> None:
+    """Releasing the mouse outside the button after pressing it cancels the action."""
+    from mazer.ui.menu import MenuState, draw_menu
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    surface = pygame.Surface((600, 500))
+    font = pygame.font.SysFont(None, 22)
+    state = MenuState(request)
+    layout = draw_menu(surface, state, font)
+
+    btn = layout.generate_btn
+    state.handle_mousedown((btn.centerx, btn.centery), layout)
+    # Release somewhere far from the button.
+    open_, req = state.handle_mouseup((5, 5), layout)
+    assert open_ is True   # menu stays open — drag-away is a cancel
+    assert req is None
+    assert not state.btn_pressed
+
+
+def test_menu_btn_pressed_color_differs_from_normal() -> None:
+    """The Generate button pixel color changes when btn_pressed is True."""
+    from mazer.ui.menu import MenuState, draw_menu
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    surface = pygame.Surface((600, 500))
+    font = pygame.font.SysFont(None, 22)
+    state = MenuState(request)
+
+    layout = draw_menu(surface, state, font)
+    btn = layout.generate_btn
+    normal_pixel = surface.get_at((btn.centerx, btn.centery))
+
+    state.btn_pressed = True
+    draw_menu(surface, state, font)
+    pressed_pixel = surface.get_at((btn.centerx, btn.centery))
+
+    assert normal_pixel != pressed_pixel
+
+
 # --- App smoke test with menu -------------------------------------------
 
 def test_app_menu_opens_and_closes_via_m_and_esc() -> None:
@@ -879,3 +1134,270 @@ def test_sigma_direction_lookup_returns_linked_name() -> None:
                 returned = sigma_direction(cell, target, cells)
                 assert returned is not None
                 assert returned in cell.linked
+
+
+# --- AnimationState unit tests ------------------------------------------
+
+
+def test_animation_steps_advance_per_frame() -> None:
+    """tick() advances current_step by elapsed_ms / ANIM_STEP_INTERVAL_MS."""
+    from mazer.ui.app import ANIM_STEP_INTERVAL_MS, AnimationState
+
+    steps = [[]] * 10
+    anim = AnimationState(steps)
+    assert anim.current_step == 0
+    assert not anim.done
+
+    # One interval → one step forward.
+    done = anim.tick(ANIM_STEP_INTERVAL_MS)
+    assert anim.current_step == 1
+    assert not done
+
+    # Two intervals at once → two steps forward.
+    done = anim.tick(ANIM_STEP_INTERVAL_MS * 2)
+    assert anim.current_step == 3
+    assert not done
+
+    # Sub-interval tick → no advancement (accumulated into next tick).
+    before = anim.current_step
+    anim.tick(ANIM_STEP_INTERVAL_MS * 0.5)
+    assert anim.current_step == before
+
+
+def test_animation_skip_jumps_to_last() -> None:
+    """skip() immediately marks done and sets current_step to the final index."""
+    from mazer.ui.app import AnimationState
+
+    steps = [[]] * 5
+    anim = AnimationState(steps)
+    anim.skip()
+    assert anim.current_step == len(steps) - 1
+    assert anim.done
+
+
+def test_animation_completes_at_last_step() -> None:
+    """tick() returns True exactly when the last step is reached."""
+    from mazer.ui.app import ANIM_STEP_INTERVAL_MS, AnimationState
+
+    steps = [[]] * 3  # steps 0, 1, 2
+    anim = AnimationState(steps)
+    # Advance past the end in one big tick — should clamp at last and return True.
+    done = anim.tick(ANIM_STEP_INTERVAL_MS * 100)
+    assert anim.current_step == len(steps) - 1
+    assert done
+    assert anim.done
+    # Subsequent ticks are no-ops.
+    done2 = anim.tick(ANIM_STEP_INTERVAL_MS)
+    assert not done2
+    assert anim.current_step == len(steps) - 1
+
+
+def test_animation_smoke_with_real_maze() -> None:
+    """AnimationState wraps a real generation_steps() sequence without error."""
+    from mazer.ui.app import ANIM_STEP_INTERVAL_MS, AnimationState
+    from mazer.types import Coord
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=5,
+        height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        capture_steps=True,
+        start=Coord(0, 0),
+        goal=Coord(4, 4),
+    )
+    with Maze(request) as m:
+        all_steps = list(m.generation_steps())
+
+    assert len(all_steps) > 0
+    anim = AnimationState(all_steps)
+    assert not anim.done
+
+    # Advance until done.
+    for _ in range(len(all_steps) + 5):
+        if anim.tick(ANIM_STEP_INTERVAL_MS):
+            break
+    assert anim.done
+    assert anim.current_step == len(all_steps) - 1
+
+
+# --- Screen-size and animation-limit clamping (MenuState) -------------------
+
+
+def test_menu_screen_size_clamps_dimensions() -> None:
+    """max_sizes caps width/height to screen-derived limits on open and during navigation."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=30, height=25,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(29, 24),
+    )
+    screen_max = {MazeType.ORTHOGONAL: (10, 8)}
+    state = MenuState(request, max_sizes=screen_max)
+    # Clamped on open.
+    assert state.width == 10
+    assert state.height == 8
+    # Can't push past screen max.
+    state.section = MenuState.SECTION_WIDTH
+    state.handle_keydown(pygame.K_RIGHT)
+    assert state.width == 10
+    state.section = MenuState.SECTION_HEIGHT
+    state.handle_keydown(pygame.K_RIGHT)
+    assert state.height == 8
+
+
+def test_menu_anim_mode_clamps_to_anim_max_w_h() -> None:
+    """When animate_mode is True, width is capped to anim_max_w and height to anim_max_h independently."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=30, height=30,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(29, 29),
+    )
+    state = MenuState(request, animate_mode=True, anim_max_w=30, anim_max_h=20)
+    # Initial clamp to separate axis limits.
+    assert state.width == 30
+    assert state.height == 20
+    # Width can't exceed anim_max_w.
+    state.section = MenuState.SECTION_WIDTH
+    state.handle_keydown(pygame.K_RIGHT)
+    assert state.width == 30
+    # Height can't exceed anim_max_h.
+    state.section = MenuState.SECTION_HEIGHT
+    state.handle_keydown(pygame.K_RIGHT)
+    assert state.height == 20
+    # Reducing height doesn't raise the width cap.
+    state.handle_keydown(pygame.K_LEFT)
+    assert state.height == 19
+    state.section = MenuState.SECTION_WIDTH
+    state.handle_keydown(pygame.K_RIGHT)
+    assert state.width == 30  # still capped at anim_max_w regardless of height
+
+
+def test_menu_type_change_reclamps_dimensions() -> None:
+    """Switching maze type in the menu re-clamps width/height to the new type's max."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL,
+        width=12, height=12,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(11, 11),
+    )
+    # ORTHOGONAL allows 12 wide but SIGMA only allows 8.
+    screen_max = {
+        MazeType.ORTHOGONAL: (12, 12),
+        MazeType.SIGMA: (8, 8),
+    }
+    state = MenuState(request, max_sizes=screen_max)
+    assert state.width == 12  # ORTHOGONAL allows it
+
+    # Cycle type to SIGMA (one step right from ORTHOGONAL is SIGMA).
+    state.section = MenuState.SECTION_TYPE
+    state.handle_keydown(pygame.K_RIGHT)
+    new_type = MenuState.SUPPORTED_TYPES[state.type_idx]
+    assert new_type == MazeType.SIGMA
+    # Width and height must be clamped to the SIGMA limit.
+    assert state.width <= 8
+    assert state.height <= 8
+
+
+# ---------------------------------------------------------------------------
+# Session 19 — algorithm compatibility filtering and educational content
+# ---------------------------------------------------------------------------
+
+
+def test_menu_algo_filtering_rhombic_excludes_binary_tree() -> None:
+    """BinaryTree is not in the compatible algorithm list for Rhombic."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.RHOMBIC, width=7, height=7,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(6, 6),
+    )
+    state = MenuState(request)
+    assert Algorithm.BINARY_TREE not in state._compatible_algos
+
+
+def test_menu_algo_filtering_orthogonal_has_all_algorithms() -> None:
+    """Orthogonal supports all 13 algorithms."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL, width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    state = MenuState(request)
+    assert len(state._compatible_algos) == len(MenuState.ALGORITHMS)
+
+
+def test_menu_type_change_reseats_algo_if_incompatible() -> None:
+    """Switching from Orthogonal to Sigma while BinaryTree is selected resets algo_idx to 0."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL, width=5, height=5,
+        algorithm=Algorithm.BINARY_TREE,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    state = MenuState(request)
+    state.section = MenuState.SECTION_TYPE
+    state.handle_keydown(pygame.K_RIGHT)  # ORTHOGONAL → SIGMA
+    assert MenuState.SUPPORTED_TYPES[state.type_idx] == MazeType.SIGMA
+    assert Algorithm.BINARY_TREE not in state._compatible_algos
+    assert state._compatible_algos[state.algo_idx] != Algorithm.BINARY_TREE
+
+
+def test_menu_type_change_preserves_algo_if_still_compatible() -> None:
+    """Switching types preserves the currently-selected algorithm when it remains valid."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL, width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    state = MenuState(request)
+    state.section = MenuState.SECTION_TYPE
+    state.handle_keydown(pygame.K_RIGHT)  # ORTHOGONAL → SIGMA
+    assert state._compatible_algos[state.algo_idx] == Algorithm.RECURSIVE_BACKTRACKER
+
+
+def test_menu_incompatible_algo_in_request_falls_back_to_index_0() -> None:
+    """Opening the menu with a type/algo combination that is filtered falls back to algo index 0."""
+    from mazer.ui.menu import MenuState
+
+    # BinaryTree is excluded for Sigma — simulate a saved config being loaded.
+    request = MazeRequest(
+        maze_type=MazeType.SIGMA, width=5, height=5,
+        algorithm=Algorithm.BINARY_TREE,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    state = MenuState(request)
+    assert state.algo_idx == 0
+    assert Algorithm.BINARY_TREE not in state._compatible_algos
+
+
+def test_menu_algo_display_name_is_human_readable() -> None:
+    """Algorithm display names are human-readable (contain spaces, proper capitalisation)."""
+    from mazer.ui.menu import _ALGO_DISPLAY_NAME
+
+    assert _ALGO_DISPLAY_NAME[Algorithm.RECURSIVE_BACKTRACKER] == "Recursive Backtracker"
+    assert " " in _ALGO_DISPLAY_NAME[Algorithm.BINARY_TREE]
+    assert _ALGO_DISPLAY_NAME[Algorithm.WILSONS] == "Wilson's"
+
+
+def test_menu_descriptions_exist_for_all_types_and_algos() -> None:
+    """Every supported maze type and every algorithm has a non-empty description string."""
+    from mazer.ui.menu import _ALGO_DESC, _TYPE_DESC, MenuState
+
+    for mt in MenuState.SUPPORTED_TYPES:
+        assert mt in _TYPE_DESC and len(_TYPE_DESC[mt]) > 10, f"Missing description for {mt}"
+    for algo in MenuState.ALGORITHMS:
+        assert algo in _ALGO_DESC and len(_ALGO_DESC[algo]) > 10, f"Missing description for {algo}"

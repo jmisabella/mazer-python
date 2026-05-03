@@ -601,7 +601,7 @@ def test_menu_initial_state_mirrors_request() -> None:
     )
     state = MenuState(request)
     assert state.type_idx == MenuState.SUPPORTED_TYPES.index(MazeType.SIGMA)
-    assert state.algo_idx == MenuState.ALGORITHMS.index(Algorithm.WILSONS)
+    assert state._compatible_algos[state.algo_idx] == Algorithm.WILSONS
     assert state.width == 8
     assert state.height == 6
     assert state.section == MenuState.SECTION_TYPE
@@ -670,7 +670,7 @@ def test_menu_right_changes_value() -> None:
     state.section = MenuState.SECTION_ALGO
     orig = state.algo_idx
     state.handle_keydown(pygame.K_RIGHT)
-    assert state.algo_idx == (orig + 1) % len(MenuState.ALGORITHMS)
+    assert state.algo_idx == (orig + 1) % len(state._compatible_algos)
 
     # Cycle algorithm back.
     state.handle_keydown(pygame.K_LEFT)
@@ -833,7 +833,7 @@ def test_menu_draw_produces_content() -> None:
         algorithm=Algorithm.RECURSIVE_BACKTRACKER,
         start=Coord(0, 0), goal=Coord(9, 9),
     )
-    surface = pygame.Surface((600, 500))
+    surface = pygame.Surface((700, 700))
     font = pygame.font.SysFont(None, 22)
     state = MenuState(request)
     layout = draw_menu(surface, state, font)
@@ -1304,3 +1304,100 @@ def test_menu_type_change_reclamps_dimensions() -> None:
     # Width and height must be clamped to the SIGMA limit.
     assert state.width <= 8
     assert state.height <= 8
+
+
+# ---------------------------------------------------------------------------
+# Session 19 — algorithm compatibility filtering and educational content
+# ---------------------------------------------------------------------------
+
+
+def test_menu_algo_filtering_rhombic_excludes_binary_tree() -> None:
+    """BinaryTree is not in the compatible algorithm list for Rhombic."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.RHOMBIC, width=7, height=7,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(6, 6),
+    )
+    state = MenuState(request)
+    assert Algorithm.BINARY_TREE not in state._compatible_algos
+
+
+def test_menu_algo_filtering_orthogonal_has_all_algorithms() -> None:
+    """Orthogonal supports all 13 algorithms."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL, width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    state = MenuState(request)
+    assert len(state._compatible_algos) == len(MenuState.ALGORITHMS)
+
+
+def test_menu_type_change_reseats_algo_if_incompatible() -> None:
+    """Switching from Orthogonal to Sigma while BinaryTree is selected resets algo_idx to 0."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL, width=5, height=5,
+        algorithm=Algorithm.BINARY_TREE,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    state = MenuState(request)
+    state.section = MenuState.SECTION_TYPE
+    state.handle_keydown(pygame.K_RIGHT)  # ORTHOGONAL → SIGMA
+    assert MenuState.SUPPORTED_TYPES[state.type_idx] == MazeType.SIGMA
+    assert Algorithm.BINARY_TREE not in state._compatible_algos
+    assert state._compatible_algos[state.algo_idx] != Algorithm.BINARY_TREE
+
+
+def test_menu_type_change_preserves_algo_if_still_compatible() -> None:
+    """Switching types preserves the currently-selected algorithm when it remains valid."""
+    from mazer.ui.menu import MenuState
+
+    request = MazeRequest(
+        maze_type=MazeType.ORTHOGONAL, width=5, height=5,
+        algorithm=Algorithm.RECURSIVE_BACKTRACKER,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    state = MenuState(request)
+    state.section = MenuState.SECTION_TYPE
+    state.handle_keydown(pygame.K_RIGHT)  # ORTHOGONAL → SIGMA
+    assert state._compatible_algos[state.algo_idx] == Algorithm.RECURSIVE_BACKTRACKER
+
+
+def test_menu_incompatible_algo_in_request_falls_back_to_index_0() -> None:
+    """Opening the menu with a type/algo combination that is filtered falls back to algo index 0."""
+    from mazer.ui.menu import MenuState
+
+    # BinaryTree is excluded for Sigma — simulate a saved config being loaded.
+    request = MazeRequest(
+        maze_type=MazeType.SIGMA, width=5, height=5,
+        algorithm=Algorithm.BINARY_TREE,
+        start=Coord(0, 0), goal=Coord(4, 4),
+    )
+    state = MenuState(request)
+    assert state.algo_idx == 0
+    assert Algorithm.BINARY_TREE not in state._compatible_algos
+
+
+def test_menu_algo_display_name_is_human_readable() -> None:
+    """Algorithm display names are human-readable (contain spaces, proper capitalisation)."""
+    from mazer.ui.menu import _ALGO_DISPLAY_NAME
+
+    assert _ALGO_DISPLAY_NAME[Algorithm.RECURSIVE_BACKTRACKER] == "Recursive Backtracker"
+    assert " " in _ALGO_DISPLAY_NAME[Algorithm.BINARY_TREE]
+    assert _ALGO_DISPLAY_NAME[Algorithm.WILSONS] == "Wilson's"
+
+
+def test_menu_descriptions_exist_for_all_types_and_algos() -> None:
+    """Every supported maze type and every algorithm has a non-empty description string."""
+    from mazer.ui.menu import _ALGO_DESC, _TYPE_DESC, MenuState
+
+    for mt in MenuState.SUPPORTED_TYPES:
+        assert mt in _TYPE_DESC and len(_TYPE_DESC[mt]) > 10, f"Missing description for {mt}"
+    for algo in MenuState.ALGORITHMS:
+        assert algo in _ALGO_DESC and len(_ALGO_DESC[algo]) > 10, f"Missing description for {algo}"

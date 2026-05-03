@@ -728,3 +728,24 @@ In the iOS app we animate the solution one cell at a time but in rapid successio
 - **New-maze resets**: both `_begin_animation()` and the R key non-animate path reset `show_solution = False` and `solution_anim = None`, so a freshly generated maze never auto-reveals its solution.
 - **`_complete_animation()`** also resets solution state, so finishing a generation animation starts clean.
 - Verified: 118 tests pass; smoke test confirms 47-cell path reveals incrementally at 15ms/cell, partial renderer draw works, full reveal (`solution_revealed=None`) works.
+
+## Session 19 [completed 2026-05-02]
+### Rework the menu: Make it look more polished and professional, perhaps a dark mode version would look better. Also, (and VERY importantly), Game Grid types and Maze Algorithms should all have accompanying educational descriptive summary
+Regarding the mention to rework the menu: the current menu works but feels a bit unpolished. Also, the current left/right navigation between enumerated values, does it not adhere to my desire to add the accompanying summaries to Grid Type and Maze Algorithm? I feel these accompanying summaries are good to educate players the differences between the algorithms especially, as well as the different grid types. Below are where you'll find the literal copies I want to use for these summaries:
+- Grid Type copy to use: .planning/referenced_resources/iOS_app/mazer-ios/Models/MazeType.swift
+- Maze Algorithm copy to use: .planning/referenced_resources/iOS_app/mazer-ios/Models/MazeAlgorithm.swift
+
+#### Session 19 notes
+
+**Dark mode palette**: replaced the light-mode `(245,245,250)` panel with a near-black blue-grey `(22,24,30)` panel, indigo focus highlight, vivid indigo arrows, and high-contrast near-white text. Error color bumped to `(255,85,85)` for visibility on the dark background.
+
+**Educational description panels**: two fixed-height text areas added below the Grid Type and Algorithm rows — always visible, brightness tied to row focus (`_DESC_BRIGHT` when focused, `_DESC_DIM` when not). Descriptions update immediately as the user cycles ‹ ›. Type descriptions (~1 sentence) get 48px; algorithm descriptions (~2-3 sentences) get 76px. Greedy word-wrap helper `_wrap_text` handles line breaking.
+
+**Human-readable algorithm display names**: the raw FFI values like "RecursiveBacktracker" replaced with "Recursive Backtracker", "Aldous Broder", "Kruskal's", "Wilson's", etc. — exact text from `MazeAlgorithm.swift`'s `displayName` property. Stored in `_ALGO_DISPLAY_NAME` dict, used in both the nav row and the `set_generation_error` message.
+
+**Algorithm compatibility filtering** (from `MazeAlgorithm.availableAlgorithms`): `_ALGO_EXCLUSIONS` dict maps each maze type to a frozenset of excluded algorithms. Orthogonal allows all 13; Rhombic excludes 6 (BinaryTree, Sidewinder, Ellers, GrowingTreeNewest, GrowingTreeRandom, HuntAndKill); Delta/Sigma/Upsilon exclude 4 (BinaryTree, Sidewinder, Ellers, RecursiveDivision). `MenuState._compatible_algos` property returns the filtered list for the current type. `algo_idx` indexes into this filtered list — when the type changes, the current algorithm is preserved if still compatible, else resets to index 0. Protects against saved-config edge cases (incompatible algo in request falls back to 0 on open).
+
+**Layout changes**: panel width 460→520px; `_MENU_H` grew by ~156px to ~490px for the two description areas. `_MENU_MIN_WINDOW_W`/`_MENU_MIN_WINDOW_H` in `app.py` bumped to 560/640 to ensure the taller panel is always fully visible. `draw_menu` refactored with two helper functions — `_draw_nav_row` (eliminates the repeated row-drawing loop) and `_draw_desc_area` (renders wrapped text in a fixed rect).
+
+**Tests**: 125 passed (was 118; +7 new: algo filtering for Rhombic/Orthogonal, type-change algo re-seating, incompatible-in-request fallback, display name format, descriptions coverage). Two existing tests updated to assert on `_compatible_algos[idx]` rather than the full `ALGORITHMS` list index. `test_menu_draw_produces_content` surface bumped to 700×700. Interactive acceptance (visual dark menu, descriptions rendering, algo filtering) requires user at a real display.
+

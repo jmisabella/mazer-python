@@ -86,8 +86,8 @@ HUD_HEIGHT = 56
 # Minimum window size that ensures the settings menu panel (460 px wide,
 # ~338 px tall + HUD) is fully visible.  Windows narrower or shorter than
 # this are temporarily enlarged when the menu opens and restored on close.
-_MENU_MIN_WINDOW_W = 500
-_MENU_MIN_WINDOW_H = 450
+_MENU_MIN_WINDOW_W = 560
+_MENU_MIN_WINDOW_H = 640
 
 # Per-side grid cap when animation mode is active.  16×16 = 256 cells keeps
 # even Aldous-Broder step counts manageable (O(n log n) expected steps).

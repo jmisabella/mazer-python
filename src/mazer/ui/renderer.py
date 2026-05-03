@@ -860,7 +860,7 @@ class DeltaRenderer:
         h = int(round(self.tri_height * rows))
         return pygame.Rect(self.offset_x, self.offset_y, w, h)
 
-    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool, trail: list | None = None) -> None:
+    def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool, trail: list | None = None, solution_revealed: frozenset | None = None) -> None:
         if not cells:
             return
         self._trail_dict: dict = {coord: i for i, coord in enumerate(trail)} if trail else {}
@@ -870,7 +870,7 @@ class DeltaRenderer:
         bg = self.gradient.base if self.gradient is not None else OFF_WHITE
         pygame.draw.rect(self.surface, bg, bbox)
         for cell in cells:
-            self._draw_cell(cell, max_distance, total_rows, show_heatmap, show_solution)
+            self._draw_cell(cell, max_distance, total_rows, show_heatmap, show_solution, solution_revealed)
         pygame.draw.rect(self.surface, BORDER_COLOR, bbox, BORDER_WIDTH)
 
     def cell_at(self, pos: tuple[int, int], cells: list[Cell]) -> Coord | None:

@@ -501,9 +501,9 @@ class SolutionAnimState:
         return False
 
 
-HUD_BG = OFF_WHITE
-HUD_TITLE_COLOR = (40, 40, 40)
-HUD_HINT_COLOR = (90, 90, 90)
+HUD_BG = (22, 24, 30)          # matches the dark-mode settings menu panel
+HUD_TITLE_COLOR = (225, 228, 240)
+HUD_HINT_COLOR = (140, 145, 165)
 SOLVED_TEXT_COLOR = (255, 255, 255)
 SOLVED_OVERLAY_RGBA = (0, 0, 0, 130)
 
@@ -651,7 +651,7 @@ def _draw_hud(
     move_hint = _HUD_HINT_BY_TYPE.get(request.maze_type, "")
     if hud_msg:
         hint_text = hud_msg
-        hint_color = (220, 120, 20)  # orange — transient warning
+        hint_color = (255, 155, 40)  # orange — transient warning
     elif anim_info is not None:
         hint_text = anim_info
         hint_color = HUD_HINT_COLOR
@@ -665,7 +665,7 @@ def _draw_hud(
     surface.blit(font.render(title, True, HUD_TITLE_COLOR), (12, 8))
     surface.blit(font.render(hint_text, True, hint_color), (12, 30))
     if solved:
-        msg = font.render("Solved!", True, (16, 130, 60))
+        msg = font.render("Solved!", True, (50, 215, 100))
         surface.blit(msg, msg.get_rect(midright=(surface.get_width() - 12, HUD_HEIGHT // 2)))
 
 

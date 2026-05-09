@@ -66,6 +66,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import math
+import random
 import sys
 from collections import deque
 
@@ -501,6 +502,97 @@ class SolutionAnimState:
         return False
 
 
+_CONFETTI_COLORS = [
+    (255, 80, 160),   # hot pink
+    (255, 200, 50),   # gold
+    (80, 220, 200),   # teal
+    (60, 160, 255),   # sky blue
+    (80, 220, 100),   # lime green
+    (255, 140, 50),   # orange
+    (200, 80, 255),   # violet
+    (255, 255, 80),   # yellow
+    (255, 120, 180),  # blush (matches VISITED_COLOR family)
+    (116, 180, 191),  # solution teal (matches SOLUTION_COLOR)
+]
+_CONFETTI_COUNT = 70
+_CONFETTI_GRAVITY = 380.0   # px / s²
+_CONFETTI_DURATION_MS = 2400.0
+
+
+class _Confetto:
+    __slots__ = ("x", "y", "vx", "vy", "color", "w", "h", "elapsed", "lifetime")
+
+    def __init__(
+        self,
+        x: float,
+        y: float,
+        vx: float,
+        vy: float,
+        color: tuple[int, int, int],
+        w: int,
+        h: int,
+        lifetime: float,
+    ) -> None:
+        self.x = x
+        self.y = y
+        self.vx = vx
+        self.vy = vy
+        self.color = color
+        self.w = w
+        self.h = h
+        self.elapsed = 0.0
+        self.lifetime = lifetime
+
+
+class CelebrationState:
+    """Confetti burst that plays briefly when the player solves the maze."""
+
+    def __init__(self, origin: tuple[int, int]) -> None:
+        self.elapsed_ms: float = 0.0
+        self.done: bool = False
+        cx, cy = origin
+        self._particles: list[_Confetto] = []
+        for _ in range(_CONFETTI_COUNT):
+            angle = random.uniform(0, 2 * math.pi)
+            speed = random.uniform(90, 360)
+            vx = math.cos(angle) * speed
+            # bias upward so particles arc nicely before falling
+            vy = math.sin(angle) * speed - random.uniform(60, 180)
+            color = random.choice(_CONFETTI_COLORS)
+            w = random.randint(5, 10)
+            h = random.randint(4, 8)
+            lifetime = random.uniform(1000.0, _CONFETTI_DURATION_MS)
+            sx = cx + random.uniform(-15, 15)
+            sy = cy + random.uniform(-15, 15)
+            self._particles.append(_Confetto(sx, sy, vx, vy, color, w, h, lifetime))
+
+    def tick(self, elapsed_ms: float) -> None:
+        self.elapsed_ms += elapsed_ms
+        dt = elapsed_ms / 1000.0
+        for p in self._particles:
+            p.elapsed += elapsed_ms
+            p.x += p.vx * dt
+            p.y += p.vy * dt
+            p.vy += _CONFETTI_GRAVITY * dt
+        if self.elapsed_ms >= _CONFETTI_DURATION_MS:
+            self.done = True
+
+    def draw(self, surface: pygame.Surface) -> None:
+        for p in self._particles:
+            if p.elapsed >= p.lifetime:
+                continue
+            frac = 1.0 - p.elapsed / p.lifetime
+            r, g, b = p.color
+            # dim color toward black as it fades (fast on the dark background)
+            dimmed = (int(r * frac), int(g * frac), int(b * frac))
+            pygame.draw.rect(
+                surface,
+                dimmed,
+                pygame.Rect(int(p.x) - p.w // 2, int(p.y) - p.h // 2, p.w, p.h),
+                border_radius=2,
+            )
+
+
 HUD_BG = (22, 24, 30)          # matches the dark-mode settings menu panel
 HUD_TITLE_COLOR = (225, 228, 240)
 HUD_HINT_COLOR = (140, 145, 165)
@@ -777,6 +869,8 @@ def main(argv: list[str] | None = None) -> None:
     # whole screen turns grayscale until release, then a new maze generates.
     solved_btn_pressed: bool = False
     solved: bool = False  # pre-initialised so the event loop can read it on frame 0
+    _prev_solved: bool = False
+    celebration: CelebrationState | None = None
     trail: deque = deque(maxlen=3)   # coords of the last 3 vacated cells, index 0 = most recent
     _prev_active_coord = None        # active coord from the previous frame
     _visited_set: set = set()        # all coords the player has ever stood on this maze
@@ -1143,6 +1237,9 @@ def main(argv: list[str] | None = None) -> None:
             if solution_anim is not None:
                 solution_anim.tick(min(dt, 32))
 
+            if celebration is not None and not celebration.done:
+                celebration.tick(min(dt, 32))
+
             if anim is not None and anim.steps:
                 cells = anim.steps[anim.current_step]
                 solved = False
@@ -1150,6 +1247,9 @@ def main(argv: list[str] | None = None) -> None:
             else:
                 cells = maze.cells()
                 solved = _is_solved(cells)
+                if solved and not _prev_solved:
+                    celebration = CelebrationState(renderer.maze_rect(cells).center)
+                _prev_solved = solved
                 active_coord = next((c.coord for c in cells if c.is_active), None)
                 if active_coord != _prev_active_coord and _prev_active_coord is not None:
                     if active_coord not in _visited_set:  # new cell — moving forward
@@ -1171,6 +1271,8 @@ def main(argv: list[str] | None = None) -> None:
             renderer.draw(cells, show_heatmap=show_heatmap, show_solution=show_solution, trail=active_trail, solution_revealed=solution_revealed)
             if solved:
                 _draw_solved_overlay(screen, renderer.maze_rect(cells), big_font, hud_font)
+                if celebration is not None and not celebration.done:
+                    celebration.draw(screen)
 
             anim_info: str | None = None
             if anim is not None:

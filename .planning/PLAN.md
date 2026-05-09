@@ -749,5 +749,17 @@ Regarding the mention to rework the menu: the current menu works but feels a bit
 
 **Tests**: 125 passed (was 118; +7 new: algo filtering for Rhombic/Orthogonal, type-change algo re-seating, incompatible-in-request fallback, display name format, descriptions coverage). Two existing tests updated to assert on `_compatible_algos[idx]` rather than the full `ALGORITHMS` list index. `test_menu_draw_produces_content` surface bumped to 700×700. Interactive acceptance (visual dark menu, descriptions rendering, algo filtering) requires user at a real display.
 
+## Session 20 [completed 2026-05-09]
+### When the maze is solved, please make a nice but brief celebration animation occur
+
+#### Session 20 notes
+- Added `CelebrationState` class (and private `_Confetto` dataclass) to `src/mazer/ui/app.py`, placed alongside the existing `AnimationState` / `SolutionAnimState` animation classes.
+- 70 confetti particles burst from the maze center on solve: random angle/speed, upward bias (`vy -= 60–180 px`), gravity 380 px/s², lifetime 1–2.4 s, total animation 2.4 s.
+- 10 celebratory colors that complement the existing palette (pink, gold, teal, sky blue, lime, orange, violet, yellow, blush, solution-teal).
+- Particles fade by dimming RGB toward black (`color * (1 - elapsed/lifetime)`) — no alpha Surface allocation per particle, so it stays fast at 60 fps.
+- Transition detection: `solved and not _prev_solved` fires exactly once when the player first lands on the goal cell, creating a fresh `CelebrationState`. `_prev_solved` tracks the previous frame's state.
+- Ticking is gated on `not celebration.done`; drawing is gated on `if solved:` so confetti only renders while the solved overlay is visible — if the player immediately regenerates the maze the animation stops automatically.
+- No `nonlocal` changes needed: `celebration` and `_prev_solved` are plain loop variables in `main()`, not inside nested functions.
+
 
 

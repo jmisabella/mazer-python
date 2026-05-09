@@ -842,7 +842,7 @@ def main(argv: list[str] | None = None) -> None:
         )
 
     pygame.display.set_caption(
-        f"Mazer — {request.maze_type.value} · {request.algorithm.value} {request.width}×{request.height}"
+        f"Maze Q — {request.maze_type.value} · {request.algorithm.value} {request.width}×{request.height}"
     )
 
     screen = pygame.display.set_mode(_window_size(request, cell_size))
@@ -927,7 +927,7 @@ def main(argv: list[str] | None = None) -> None:
                     arrows_consumed.clear()
                     drag.end()
                     pygame.display.set_caption(
-                        f"Mazer — {request.maze_type.value} · "
+                        f"Maze Q — {request.maze_type.value} · "
                         f"{request.algorithm.value} {request.width}×{request.height}"
                     )
                     if animate_mode:

@@ -762,4 +762,62 @@ Regarding the mention to rework the menu: the current menu works but feels a bit
 - No `nonlocal` changes needed: `celebration` and `_prev_solved` are plain loop variables in `main()`, not inside nested functions.
 
 
+## Session 21 [completed 2026-05-09]
+### Standalone executable distribution via PyInstaller
+
+Goal: let anyone double-click a single file (macOS `.app`, or a folder on other platforms) and play the game — no Python, no pip, no source code required. Two committed artifacts make this reproducible: a `mazer.spec` file (PyInstaller's build config) and a `build_app.sh` script that runs it.
+
+#### Stage 1 — Add PyInstaller as a dev dependency
+
+In `pyproject.toml`, add `pyinstaller >= 6.0` to `[project.optional-dependencies] dev`. Keep it separate from runtime deps — it's only needed by whoever is producing a release binary.
+
+#### Stage 2 — Create `mazer.spec`
+
+PyInstaller uses a `.spec` Python file as its build manifest. Commit it at the repo root so the build is reproducible. Key things the spec must do:
+
+- Set `name = "Mazer"` and `console = False` (no terminal window on macOS/Windows).
+- In `binaries`, include `native/libmazer.dylib` (macOS) or `native/libmazer.so` (Linux) so the Rust library ships inside the bundle. PyInstaller places these in `_MEIPASS/` at runtime.
+- In `datas`, include any pygame font/icon assets if used (check `src/mazer/ui/` for any bundled files).
+- Patch `_ffi.py` or use a runtime hook (`rthooks/`) to set `ffi.dlopen()` to look in `sys._MEIPASS` rather than the hardcoded `native/` path — this is the critical piece that makes the bundled app actually find `libmazer.dylib` at runtime.
+- On macOS: set `bundle_identifier = "com.yourname.mazer"` in the `BUNDLE` step and target a `.app` output.
+- Use `--collect-all pygame` (or `collect_all=["pygame"]` in the spec) to ensure pygame's SDL dylibs and data files are included.
+
+The spec's OS detection should handle macOS vs Linux gracefully (different lib extension, different bundle step). Windows support can be left as a `TODO` comment for now.
+
+#### Stage 3 — Create `build_app.sh`
+
+A short shell script (pattern: same philosophy as `build_rust.sh`) that:
+
+1. Checks prerequisites: `pyinstaller` is available (`command -v pyinstaller`), and `native/libmazer.dylib` (or `.so`) exists — bail with a clear message if either is missing (run `./build.sh` first).
+2. Runs `pyinstaller --clean --noconfirm mazer.spec`.
+3. On macOS: runs `delocate-wheel` is *not* needed here (PyInstaller bundles deps itself), but optionally zips `dist/Mazer.app` into `dist/Mazer-macos-arm64.zip` (or the appropriate arch) for easy upload to GitHub Releases. Detect arch via `uname -m`.
+4. Prints the output path and a one-liner reminder of how to upload to GitHub Releases (`gh release upload`).
+
+Make the script `chmod +x` and idempotent (`--clean --noconfirm` handles reruns).
+
+#### Stage 4 — `.gitignore` and README
+
+- Add `dist/` and `build/` to `.gitignore` (PyInstaller output — not `native/build/`, the Rust build dir, which is already ignored).
+- Update `README.md` with a "Download & play" section above the "Development" section: point users to the GitHub Releases page to grab the latest `Mazer-macos-*.zip`, unzip, and double-click. Also document `./build_app.sh` for anyone who wants to build from source.
+
+#### Key technical decision: the `_ffi.py` runtime path
+
+The current `_ffi.py` does `ffi.dlopen(str(Path(__file__).parent.parent.parent / "native" / LIB_NAME))`. That relative path works from the source tree but breaks inside a PyInstaller bundle (where `__file__` is somewhere under `_MEIPASS`). Fix: in `_ffi.py`, detect the frozen context and redirect to `sys._MEIPASS`:
+
+```python
+import sys, os
+if getattr(sys, "frozen", False):
+    _lib_dir = sys._MEIPASS
+else:
+    _lib_dir = str(Path(__file__).parent.parent.parent / "native")
+_lib = ffi.dlopen(os.path.join(_lib_dir, LIB_NAME))
+```
+
+This is the single most important correctness fix for the bundled app — everything else is packaging config.
+
+#### Verification
+
+After `./build_app.sh`:
+- On macOS: `open dist/Mazer.app` should launch the game with no terminal, no Python install, no source tree.
+- `otool -L dist/Mazer.app/Contents/MacOS/Mazer` should show only system frameworks (no references to the dev machine's `/usr/local/lib` or venv paths).
 

@@ -48,7 +48,9 @@ MANIFEST
 #   Usually these files are written by a python script from a template
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
-*.spec
+# mazer.spec is intentionally committed (it's our reproducible build config).
+# Generic *.spec is left un-ignored so other generated specs stay ignored if
+# they appear; only our hand-authored mazer.spec is tracked.
 
 # Installer logs
 pip-log.txt

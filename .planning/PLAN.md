@@ -821,3 +821,37 @@ After `./build_app.sh`:
 - On macOS: `open dist/Mazer.app` should launch the game with no terminal, no Python install, no source tree.
 - `otool -L dist/Mazer.app/Contents/MacOS/Mazer` should show only system frameworks (no references to the dev machine's `/usr/local/lib` or venv paths).
 
+## Session 22 [uncompleted]
+### Keep the game window fully on-screen; center it on launch
+
+**Problem:** At large grid sizes (especially Orthogonal at max width × height), the right and bottom edges of the window are clipped off-screen. The user has to manually drag the window to see the full maze.
+
+**Root cause — two separate issues:**
+
+1. **`get_desktop_sizes()` returns the full physical display resolution**, not the usable area. On macOS the menu bar (~25 px) and Dock (variable, typically 70–80 px) eat into the available height, so the existing 90 % height margin (`SCREEN_MARGIN_H = 0.90`) is not tight enough on a standard MacBook. The computed max grid size can still produce a window taller than the space the OS will actually give us.
+
+2. **No explicit window positioning.** `pygame.display.set_mode()` lets the OS choose where to place the window. On macOS this is typically near the top-left of the screen, so a window that is even slightly too tall will have its bottom clipped, and one that is too wide will have its right edge off-screen.
+
+**Fix — two-part:**
+
+**Part A — tighter usable-area estimate.**
+After calling `get_desktop_sizes()` to get the raw display size `(_sw, _sh)`, subtract a per-platform estimate of system chrome before computing `_avail_w` / `_avail_h`. On macOS: subtract ~30 px from the top (menu bar) and the larger of 80 px or ~13 % of screen height from the bottom (Dock). On Linux: subtract ~50 px from the top (typical panel/taskbar). Detect platform via `sys.platform`. Keep the existing percentage margins on top of this so there is still breathing room. This fixes the max-size clamping in both the CLI path and the in-game menu.
+
+**Part B — center the window after creation.**
+After each `pygame.display.set_mode(size)` call (initial launch and after a menu-driven resize), reposition the window so it is centered within the usable area. In pygame-ce this is done via `pygame.display.get_surface()` is not enough — use `pygame.Window` (available in pygame-ce 2.x):
+```python
+win = pygame.display.get_surface()
+# pygame-ce exposes the underlying SDL window via:
+sdl_win = pygame.display.get_wm_info()  # or pygame.Window.from_display_module()
+```
+The cleanest pygame-ce API is `pygame.Window.from_display_module()` which returns the current `pygame.Window` object. Then:
+```python
+w, h = screen.get_size()
+x = (_sw - w) // 2
+y = max(30, (_sh - h) // 2)   # never above the menu bar
+pygame.Window.from_display_module().position = (x, y)
+```
+This should be called whenever `set_mode` is called: on initial launch, after menu apply, and after menu cancel (resize restore). Wrap it in a helper `_center_window(screen, sw, sh)` to avoid repetition.
+
+**Verification:** open the game at the maximum allowed Orthogonal grid size and confirm the entire window (including the bottom row of cells and the HUD bar) is visible without any dragging.
+

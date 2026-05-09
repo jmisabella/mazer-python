@@ -821,7 +821,7 @@ After `./build_app.sh`:
 - On macOS: `open dist/Mazer.app` should launch the game with no terminal, no Python install, no source tree.
 - `otool -L dist/Mazer.app/Contents/MacOS/Mazer` should show only system frameworks (no references to the dev machine's `/usr/local/lib` or venv paths).
 
-## Session 22 [uncompleted]
+## Session 22 [completed 2026-05-09]
 ### Keep the game window fully on-screen; center it on launch
 
 **Problem:** At large grid sizes (especially Orthogonal at max width × height), the right and bottom edges of the window are clipped off-screen. The user has to manually drag the window to see the full maze.

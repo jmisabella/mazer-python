@@ -855,7 +855,7 @@ This should be called whenever `set_mode` is called: on initial launch, after me
 
 **Verification:** open the game at the maximum allowed Orthogonal grid size and confirm the entire window (including the bottom row of cells and the HUD bar) is visible without any dragging.
 
-## Session 23 [uncompleted]
+## Session 23 [completed 2026-05-09]
 ### Randomise the heatmap palette on each new maze, matching iOS behaviour
 
 **Problem:** The Python game hard-codes a single blue ("Belize Hole") heatmap palette. The iOS app randomly selects from 20 named palettes on every maze regeneration, excluding the previous one to avoid repeats.

@@ -127,19 +127,107 @@ BORDER_COLOR = (0, 0, 0)
 LETTER_COLOR = (255, 255, 255)
 
 
-# Belize Hole palette from HeatMapPalette.swift (light → dark).
-HEATMAP_BELIZE_HOLE = (
-    (234, 242, 248),
-    (212, 230, 241),
-    (169, 204, 227),
-    (127, 179, 213),
-    (84, 153, 199),
-    (41, 128, 185),
-    (36, 113, 163),
-    (31, 97, 141),
-    (26, 82, 118),
-    (21, 67, 96),
+# All 20 heatmap palettes ported from HeatMapPalette.swift (light → dark, 10 shades each).
+# Each is a tuple of (R, G, B) tuples matching the iOS allPalettes ordering.
+HEATMAP_TURQUOISE = (
+    (232, 248, 245), (209, 242, 235), (163, 228, 215), (118, 215, 196), (72, 201, 176),
+    (26, 188, 156),  (23, 165, 137),  (20, 143, 119),  (17, 120, 100),  (14, 98, 81),
 )
+HEATMAP_GREEN_SEA = (
+    (232, 246, 243), (208, 236, 231), (162, 217, 206), (115, 198, 182), (69, 179, 157),
+    (22, 160, 133),  (19, 141, 117),  (17, 122, 101),  (14, 102, 85),   (11, 83, 69),
+)
+HEATMAP_EMERALD = (
+    (234, 250, 241), (213, 245, 227), (171, 235, 198), (130, 224, 170), (88, 214, 141),
+    (46, 204, 113),  (40, 180, 99),   (35, 155, 86),   (29, 131, 72),   (24, 106, 59),
+)
+HEATMAP_NEPHRITIS = (
+    (233, 247, 239), (212, 239, 223), (169, 223, 191), (125, 206, 160), (82, 190, 128),
+    (39, 174, 96),   (34, 153, 84),   (30, 132, 73),   (25, 111, 61),   (20, 90, 50),
+)
+HEATMAP_PETER_RIVER = (
+    (235, 245, 251), (214, 234, 248), (174, 214, 241), (133, 193, 233), (93, 173, 226),
+    (52, 152, 219),  (46, 134, 193),  (40, 116, 166),  (33, 97, 140),   (27, 79, 114),
+)
+HEATMAP_BELIZE_HOLE = (
+    (234, 242, 248), (212, 230, 241), (169, 204, 227), (127, 179, 213), (84, 153, 199),
+    (41, 128, 185),  (36, 113, 163),  (31, 97, 141),   (26, 82, 118),   (21, 67, 96),
+)
+HEATMAP_AMETHYST = (
+    (245, 238, 248), (235, 222, 240), (215, 189, 226), (195, 155, 211), (175, 122, 197),
+    (155, 89, 182),  (136, 78, 160),  (118, 68, 138),  (99, 57, 116),   (81, 46, 95),
+)
+HEATMAP_WISTERIA = (
+    (244, 236, 247), (232, 218, 239), (210, 180, 222), (187, 143, 206), (165, 105, 189),
+    (142, 68, 173),  (125, 60, 152),  (108, 52, 131),  (91, 44, 111),   (74, 35, 90),
+)
+HEATMAP_SUNFLOWER = (
+    (254, 249, 231), (252, 243, 207), (249, 231, 159), (247, 220, 111), (244, 208, 63),
+    (241, 196, 15),  (212, 172, 13),  (183, 149, 11),  (154, 125, 10),  (125, 102, 8),
+)
+HEATMAP_ORANGE = (
+    (254, 245, 231), (253, 235, 208), (250, 215, 160), (248, 196, 113), (245, 176, 65),
+    (243, 156, 18),  (214, 137, 16),  (185, 119, 14),  (156, 100, 12),  (126, 81, 9),
+)
+HEATMAP_CARROT = (
+    (253, 242, 233), (250, 229, 211), (245, 203, 167), (240, 178, 122), (235, 152, 78),
+    (230, 126, 34),  (202, 111, 30),  (175, 96, 26),   (147, 81, 22),   (120, 66, 18),
+)
+HEATMAP_PUMPKIN = (
+    (251, 238, 230), (246, 221, 204), (237, 187, 153), (229, 152, 102), (220, 118, 51),
+    (211, 84, 0),    (186, 74, 0),    (160, 64, 0),    (135, 54, 0),    (110, 44, 0),
+)
+HEATMAP_ALIZARIN = (
+    (253, 237, 236), (250, 219, 216), (245, 183, 177), (241, 148, 138), (236, 112, 99),
+    (231, 76, 60),   (203, 67, 53),   (176, 58, 46),   (148, 49, 38),   (120, 40, 31),
+)
+HEATMAP_POMEGRANATE = (
+    (249, 235, 234), (242, 215, 213), (230, 176, 170), (217, 136, 128), (205, 97, 85),
+    (192, 57, 43),   (169, 50, 38),   (146, 43, 33),   (123, 36, 28),   (100, 30, 22),
+)
+HEATMAP_CLOUDS = (
+    (253, 254, 254), (251, 252, 252), (247, 249, 249), (244, 246, 247), (240, 243, 244),
+    (236, 240, 241), (208, 211, 212), (179, 182, 183), (151, 154, 154), (123, 125, 125),
+)
+HEATMAP_SILVER = (
+    (248, 249, 249), (242, 243, 244), (229, 231, 233), (215, 219, 221), (202, 207, 210),
+    (189, 195, 199), (166, 172, 175), (144, 148, 151), (121, 125, 127), (98, 101, 103),
+)
+HEATMAP_CONCRETE = (
+    (244, 246, 246), (234, 237, 237), (213, 219, 219), (191, 201, 202), (170, 183, 184),
+    (149, 165, 166), (131, 145, 146), (113, 125, 126), (95, 106, 106),  (77, 86, 86),
+)
+HEATMAP_ASBESTOS = (
+    (242, 244, 244), (229, 232, 232), (204, 209, 209), (178, 186, 187), (153, 163, 164),
+    (127, 140, 141), (112, 123, 124), (97, 106, 107),  (81, 90, 90),    (66, 73, 73),
+)
+HEATMAP_WET_ASPHALT = (
+    (235, 237, 239), (214, 219, 223), (174, 182, 191), (133, 146, 158), (93, 109, 126),
+    (52, 73, 94),    (46, 64, 83),    (40, 55, 71),    (33, 47, 60),    (27, 38, 49),
+)
+HEATMAP_MIDNIGHT_BLUE = (
+    (234, 236, 238), (213, 216, 220), (171, 178, 185), (128, 139, 150), (86, 101, 115),
+    (44, 62, 80),    (39, 55, 70),    (33, 47, 61),    (28, 40, 51),    (23, 32, 42),
+)
+
+# All palettes in iOS allPalettes order — used by generate_heatmap_palette().
+HEATMAP_PALETTES = (
+    HEATMAP_TURQUOISE, HEATMAP_GREEN_SEA, HEATMAP_EMERALD, HEATMAP_NEPHRITIS,
+    HEATMAP_PETER_RIVER, HEATMAP_BELIZE_HOLE, HEATMAP_AMETHYST, HEATMAP_WISTERIA,
+    HEATMAP_SUNFLOWER, HEATMAP_ORANGE, HEATMAP_CARROT, HEATMAP_PUMPKIN,
+    HEATMAP_ALIZARIN, HEATMAP_POMEGRANATE, HEATMAP_CLOUDS, HEATMAP_SILVER,
+    HEATMAP_CONCRETE, HEATMAP_ASBESTOS, HEATMAP_WET_ASPHALT, HEATMAP_MIDNIGHT_BLUE,
+)
+
+
+def generate_heatmap_palette(prev_palette=None):
+    """Return a random heatmap palette, excluding *prev_palette* to avoid repeats.
+
+    Mirrors the iOS randomPaletteExcluding(current:from:) behaviour.
+    """
+    choices = [p for p in HEATMAP_PALETTES if p is not prev_palette]
+    return random.choice(choices)
+
 
 BORDER_WIDTH = 4
 
@@ -333,6 +421,9 @@ class OrthogonalRenderer:
 
     def set_gradient(self, gradient: GradientTheme | None) -> None:
         self.gradient = gradient
+
+    def set_palette(self, palette) -> None:
+        self.palette = palette
 
     def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool, trail: list | None = None, solution_revealed: frozenset | None = None) -> None:
         if not cells:
@@ -616,6 +707,9 @@ class SigmaRenderer:
     def set_gradient(self, gradient: GradientTheme | None) -> None:
         self.gradient = gradient
 
+    def set_palette(self, palette) -> None:
+        self.palette = palette
+
     def draw(self, cells: list[Cell], show_heatmap: bool, show_solution: bool, trail: list | None = None, solution_revealed: frozenset | None = None) -> None:
         if not cells:
             return
@@ -853,6 +947,9 @@ class DeltaRenderer:
     def set_gradient(self, gradient: GradientTheme | None) -> None:
         self.gradient = gradient
 
+    def set_palette(self, palette) -> None:
+        self.palette = palette
+
     def maze_rect(self, cells: list[Cell]) -> pygame.Rect:
         cols = max(c.coord.x for c in cells) + 1
         rows = max(c.coord.y for c in cells) + 1
@@ -1054,6 +1151,9 @@ class RhombicRenderer:
 
     def set_gradient(self, gradient: GradientTheme | None) -> None:
         self.gradient = gradient
+
+    def set_palette(self, palette) -> None:
+        self.palette = palette
 
     def maze_rect(self, cells: list[Cell]) -> pygame.Rect:
         valid = [c for c in cells if (c.coord.x + c.coord.y) % 2 == 0]
@@ -1286,6 +1386,9 @@ class UpsilonRenderer:
 
     def set_gradient(self, gradient: GradientTheme | None) -> None:
         self.gradient = gradient
+
+    def set_palette(self, palette) -> None:
+        self.palette = palette
 
     def maze_rect(self, cells: list[Cell]) -> pygame.Rect:
         cols = max(c.coord.x for c in cells) + 1

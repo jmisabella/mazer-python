@@ -78,6 +78,7 @@ from mazer.ui.menu import MenuLayout, MenuState, draw_menu
 from mazer.ui.renderer import (
     OFF_WHITE,
     generate_gradient,
+    generate_heatmap_palette,
     make_renderer,
 )
 
@@ -897,6 +898,8 @@ def main(argv: list[str] | None = None) -> None:
     renderer = make_renderer(request.maze_type, screen, cell_size, offset=(0, HUD_HEIGHT))
     gradient = generate_gradient()
     renderer.set_gradient(gradient)
+    heatmap_palette = generate_heatmap_palette()
+    renderer.set_palette(heatmap_palette)
     show_heatmap = False
     show_solution = False
     # Once a chord fires from a multi-arrow KEYDOWN, mark every held arrow
@@ -952,7 +955,7 @@ def main(argv: list[str] | None = None) -> None:
 
         Mutates the enclosing ``main`` scope via ``nonlocal``.
         """
-        nonlocal maze, renderer, cell_size, screen, request, key_map, gradient
+        nonlocal maze, renderer, cell_size, screen, request, key_map, gradient, heatmap_palette
         nonlocal menu_state, menu_layout, pre_menu_size, trail, _prev_active_coord
         if not open_:
             if new_request is not None:
@@ -964,6 +967,8 @@ def main(argv: list[str] | None = None) -> None:
                     key_map = _KEYS_BY_TYPE.get(request.maze_type, ORTHOGONAL_KEYS)
                     gradient = generate_gradient()
                     renderer.set_gradient(gradient)
+                    heatmap_palette = generate_heatmap_palette(heatmap_palette)
+                    renderer.set_palette(heatmap_palette)
                     trail.clear()
                     _prev_active_coord = None
                     _visited_set.clear()
@@ -990,6 +995,7 @@ def main(argv: list[str] | None = None) -> None:
                             request.maze_type, screen, cell_size, offset=(0, HUD_HEIGHT)
                         )
                         renderer.set_gradient(gradient)
+                        renderer.set_palette(heatmap_palette)
                 pre_menu_size = None
                 keys_held.clear()
                 pygame.key.set_repeat(_GAMEPLAY_REPEAT_DELAY, _GAMEPLAY_REPEAT_INTERVAL)
@@ -1026,7 +1032,7 @@ def main(argv: list[str] | None = None) -> None:
 
     def _complete_animation() -> None:
         """Finish animation (normal end or skip) — switch to interactive play."""
-        nonlocal maze, anim, anim_maze, gradient, trail, _prev_active_coord, show_solution, solution_anim
+        nonlocal maze, anim, anim_maze, gradient, heatmap_palette, trail, _prev_active_coord, show_solution, solution_anim
         if anim is not None:
             anim.skip()
         maze.close()
@@ -1040,6 +1046,8 @@ def main(argv: list[str] | None = None) -> None:
         _visited_set.clear()
         gradient = generate_gradient(gradient.base)
         renderer.set_gradient(gradient)
+        heatmap_palette = generate_heatmap_palette(heatmap_palette)
+        renderer.set_palette(heatmap_palette)
 
     def _cancel_animation() -> None:
         """Esc during animation — discard new maze, restore old interactive maze."""
@@ -1049,6 +1057,7 @@ def main(argv: list[str] | None = None) -> None:
         anim_maze = None
         anim = None
         renderer.set_gradient(gradient)
+        renderer.set_palette(heatmap_palette)
 
     if args.animate:
         _begin_animation()
@@ -1172,6 +1181,8 @@ def main(argv: list[str] | None = None) -> None:
                                 maze = Maze(request)
                                 gradient = generate_gradient(gradient.base)
                                 renderer.set_gradient(gradient)
+                                heatmap_palette = generate_heatmap_palette(heatmap_palette)
+                                renderer.set_palette(heatmap_palette)
                                 arrows_consumed.clear()
                                 drag.end()
                     elif event.key in ARROW_KEYS:
@@ -1231,6 +1242,8 @@ def main(argv: list[str] | None = None) -> None:
                             _visited_set.clear()
                             gradient = generate_gradient(gradient.base)
                             renderer.set_gradient(gradient)
+                            heatmap_palette = generate_heatmap_palette(heatmap_palette)
+                            renderer.set_palette(heatmap_palette)
                             arrows_consumed.clear()
                             drag.end()
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -1246,6 +1259,8 @@ def main(argv: list[str] | None = None) -> None:
                             _visited_set.clear()
                             gradient = generate_gradient(gradient.base)
                             renderer.set_gradient(gradient)
+                            heatmap_palette = generate_heatmap_palette(heatmap_palette)
+                            renderer.set_palette(heatmap_palette)
                             arrows_consumed.clear()
                             drag.end()
                     else:

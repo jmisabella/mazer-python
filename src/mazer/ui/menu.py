@@ -574,7 +574,7 @@ def draw_menu(
     pygame.draw.rect(surface, _PANEL_BORDER, panel, width=2, border_radius=12)
 
     # Title.
-    title = font.render("Maze Settings", True, _TITLE_COLOR)
+    title = font.render("Maze Q", True, _TITLE_COLOR)
     surface.blit(title, (px + _PAD, py + _PAD + (_TITLE_H - title.get_height()) // 2))
 
     cy = py + _PAD + _TITLE_H + _PAD

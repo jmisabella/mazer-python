@@ -731,7 +731,7 @@ In the iOS app we animate the solution one cell at a time but in rapid successio
 
 ## Session 19 [completed 2026-05-02]
 ### Rework the menu: Make it look more polished and professional, perhaps a dark mode version would look better. Also, (and VERY importantly), Game Grid types and Maze Algorithms should all have accompanying educational descriptive summary
-Regarding the mention to rework the menu: the current menu works but feels a bit unpolished. Also, the current left/right navigation between enumerated values, does it not adhere to my desire to add the accompanying summaries to Grid Type and Maze Algorithm? I feel these accompanying summaries are good to educate players the differences between the algorithms especially, as well as the different grid types. Below are where you'll find the literal copies I want to use for these summaries:
+Regarding the mention to rework the menu: the current menu works but feels a bit unpolished. Also, the current left/right navigation between enumerated values, does it not adhere to my desire to add the accompanying summaries to Grid Type and Maze Algorithm? I feel these accompanying summaries are good to educate players the differences between the algorithms especially, as well as the different grid types. Below are where you'll find th9 literal copies I want to use for these summaries:
 - Grid Type copy to use: .planning/referenced_resources/iOS_app/mazer-ios/Models/MazeType.swift
 - Maze Algorithm copy to use: .planning/referenced_resources/iOS_app/mazer-ios/Models/MazeAlgorithm.swift
 
@@ -748,4 +748,6 @@ Regarding the mention to rework the menu: the current menu works but feels a bit
 **Layout changes**: panel width 460→520px; `_MENU_H` grew by ~156px to ~490px for the two description areas. `_MENU_MIN_WINDOW_W`/`_MENU_MIN_WINDOW_H` in `app.py` bumped to 560/640 to ensure the taller panel is always fully visible. `draw_menu` refactored with two helper functions — `_draw_nav_row` (eliminates the repeated row-drawing loop) and `_draw_desc_area` (renders wrapped text in a fixed rect).
 
 **Tests**: 125 passed (was 118; +7 new: algo filtering for Rhombic/Orthogonal, type-change algo re-seating, incompatible-in-request fallback, display name format, descriptions coverage). Two existing tests updated to assert on `_compatible_algos[idx]` rather than the full `ALGORITHMS` list index. `test_menu_draw_produces_content` surface bumped to 700×700. Interactive acceptance (visual dark menu, descriptions rendering, algo filtering) requires user at a real display.
+
+
 

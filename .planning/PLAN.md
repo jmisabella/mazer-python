@@ -855,3 +855,28 @@ This should be called whenever `set_mode` is called: on initial launch, after me
 
 **Verification:** open the game at the maximum allowed Orthogonal grid size and confirm the entire window (including the bottom row of cells and the HUD bar) is visible without any dragging.
 
+## Session 23 [uncompleted]
+### Randomise the heatmap palette on each new maze, matching iOS behaviour
+
+**Problem:** The Python game hard-codes a single blue ("Belize Hole") heatmap palette. The iOS app randomly selects from 20 named palettes on every maze regeneration, excluding the previous one to avoid repeats.
+
+**What the iOS app does** (from `HeatMapPalette.swift` + `ContentView.swift`):
+- Defines 20 palettes, each a 10-shade light-to-dark gradient: Turquoise, Green Sea, Emerald, Nephritis, Peter River, Belize Hole, Amethyst, Wisteria, Sunflower, Orange, Carrot, Pumpkin, Alizarin, Pomegranate, Clouds, Silver, Concrete, Asbestos, Wet Asphalt, Midnight Blue.
+- On first load: `allPalettes.randomElement()`.
+- On every regen: `randomPaletteExcluding(current:from:)` — picks uniformly from the 19 non-current palettes.
+
+**Implementation — all changes in `src/mazer/ui/renderer.py` and `src/mazer/ui/app.py`:**
+
+**renderer.py:**
+1. Port all 20 palettes from `HeatMapPalette.swift` as RGB tuples (convert each hex string). Keep `HEATMAP_BELIZE_HOLE` for backwards compatibility; add the other 19 as named constants in the same light-to-dark format.
+2. Collect them into a single tuple `HEATMAP_PALETTES` (all 20 entries, same ordering as the iOS `allPalettes` array).
+3. Add `generate_heatmap_palette(prev_palette=None)` alongside `generate_gradient()` — same pattern: exclude `prev_palette`, pick uniformly at random from the rest.
+
+**app.py:**
+4. Add a `heatmap_palette` variable to the game state, initialised with `generate_heatmap_palette()`.
+5. On every maze regeneration (all paths that currently call `generate_gradient(...)`), also call `generate_heatmap_palette(heatmap_palette)` and store the result.
+6. Pass `heatmap_palette` to `renderer.set_palette(palette)` — add this one-liner setter to each renderer class (they already store `self.palette`; it just needs to be writable after construction).
+7. All the wiring points where gradient is updated are also where palette should be updated: `_apply_new_request`, the R-key regen path, the Space/Enter/N keyup regen path, the mouse-click-on-solved regen path, and `_complete_animation`.
+
+**Verification:** press H to show the heatmap, then press R several times. Each new maze should show a visually distinct palette. Run through ~5 regens and confirm no two consecutive mazes share the same palette family (blue → purple → green → yellow etc.).
+

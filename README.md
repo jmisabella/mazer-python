@@ -6,12 +6,12 @@ A fully-featured maze game written in Python that wraps **mazer** — a maze eng
 
 ## Table of Contents
 
+- [Download & play (no Python required)](#download--play-no-python-required)
 - [What this is](#what-this-is)
 - [Portability: the same Rust engine, everywhere](#portability-the-same-rust-engine-everywhere)
 - [Maze types](#maze-types)
 - [Algorithms](#algorithms)
 - [Features](#features)
-- [Download & play (no Python required)](#download--play-no-python-required)
 - [Requirements](#requirements)
 - [First-time setup](#first-time-setup)
 - [Build](#build)
@@ -28,9 +28,27 @@ A fully-featured maze game written in Python that wraps **mazer** — a maze eng
 
 ---
 
+## Download & play (no Python required)
+
+Pre-built standalone apps are available on the [GitHub Releases](https://github.com/jmisabella/mazer-python/releases) page — no Python installation needed.
+
+**macOS:**
+1. Download `Maze-Q-macos-arm64.zip` (Apple Silicon) or `Maze-Q-macos-x86_64.zip` (Intel)
+2. Unzip — you'll get `Maze Q.app`
+3. Double-click `Maze Q.app` to play
+
+> **First launch on macOS:** Apple may show a security warning because the app isn't notarized. Right-click (or Control-click) `Maze Q.app` → **Open** → click **Open** in the dialog. You only need to do this once.
+
+**Linux:**
+1. Download `Maze-Q-linux-x86_64.zip`
+2. Unzip — you'll get a `Maze Q/` folder
+3. Run `"Maze Q/Maze Q"` from a terminal (or create a desktop shortcut to that executable)
+
+---
+
 ## What this is
 
-mazer-python is a playable maze game with five distinct grid geometries, thirteen generation algorithms, rich visual overlays, and smooth mouse/keyboard navigation. It was built in 19 focused sessions, each adding a concrete layer — from the raw Rust build pipeline through the cffi binding, the Pythonic wrapper, the Pygame UI, multi-grid rendering, drag-to-move, animated generation playback, and a polished dark-mode settings menu.
+mazer-python is a playable maze game with five distinct grid geometries, thirteen generation algorithms, rich visual overlays, and smooth mouse/keyboard navigation. It was built in 21 focused sessions, each adding a concrete layer — from the raw Rust build pipeline through the cffi binding, the Pythonic wrapper, the Pygame UI, multi-grid rendering, drag-to-move, animated generation playback, a polished dark-mode settings menu, and a standalone distributable app.
 
 The game supports:
 
@@ -132,24 +150,6 @@ All 13 algorithms the Rust library supports are exposed. Not every algorithm is 
 
 ---
 
-## Download & play (no Python required)
-
-Pre-built standalone apps are available on the [GitHub Releases](https://github.com/jmisabella/mazer-python/releases) page — no Python installation needed.
-
-**macOS:**
-1. Download `Maze-Q-macos-arm64.zip` (Apple Silicon) or `Maze-Q-macos-x86_64.zip` (Intel)
-2. Unzip — you'll get `Maze Q.app`
-3. Double-click `Maze Q.app` to play
-
-> **First launch on macOS:** Apple may show a security warning because the app isn't notarized. Right-click (or Control-click) `Maze Q.app` → **Open** → click **Open** in the dialog. You only need to do this once.
-
-**Linux:**
-1. Download `Maze-Q-linux-x86_64.zip`
-2. Unzip — you'll get a `Maze Q/` folder
-3. Run `"Maze Q/Maze Q"` from a terminal (or create a desktop shortcut to that executable)
-
----
-
 ## Requirements
 
 - Python 3.11+
@@ -240,11 +240,13 @@ pip install -e '.[dev]'
 ./build_app.sh
 ```
 
-Output:
+Output (filenames include the detected architecture — `arm64` on Apple Silicon, `x86_64` on Intel):
 ```
-dist/Maze Q.app                    ← double-click to run (macOS)
-dist/Maze-Q-macos-arm64.zip        ← upload this to GitHub Releases
+dist/Maze Q.app                       ← double-click to run (macOS)
+dist/Maze-Q-macos-arm64.zip           ← upload this to GitHub Releases
 ```
+
+The script prints the exact filename and the `gh` commands to run at the end, so you don't need to remember the arch tag.
 
 To publish a release on GitHub:
 ```bash
@@ -253,11 +255,11 @@ gh release create v1.0.0 \
     --title "Maze Q v1.0.0" \
     --notes "Standalone build — download, unzip, double-click. No Python required."
 
-# Upload the zip produced by build_app.sh
+# Upload the zip — copy the exact filename from build_app.sh's output
 gh release upload v1.0.0 dist/Maze-Q-macos-arm64.zip
 ```
 
-The `mazer.spec` file at the repo root is the PyInstaller build manifest — it's committed alongside the source so builds are reproducible on any dev machine.
+`mazer.spec` is the PyInstaller build manifest — it's committed to the repo so builds are reproducible on any dev machine.
 
 ---
 
@@ -418,8 +420,11 @@ mazer-python/
 ├── pyproject.toml         # hatchling build; cffi + pygame-ce runtime deps
 ├── build.sh               # orchestrator: Rust build → cffi compile
 ├── build_rust.sh          # step 1: clone/patch/build Rust cdylib into native/
+├── build_app.sh           # standalone app packaging via PyInstaller
+├── mazer.spec             # PyInstaller build manifest (committed — reproducible builds)
 ├── native/                # gitignored — libmazer.{dylib,so} + mazer.h
 ├── build/cffi/            # gitignored — cffi intermediate C source
+├── dist/                  # gitignored — PyInstaller output (Maze Q.app, zips)
 ├── src/
 │   └── mazer/
 │       ├── __init__.py
